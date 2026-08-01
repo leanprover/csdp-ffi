@@ -99,11 +99,13 @@ require CSDP from git
 lean_lib MyLibrary
 ```
 
-Consumers do not repeat BLAS/LAPACK, Fortran, or Accelerate linker flags.
-The package builds a resolved platform shared library and exports that artifact
-through CSDP's Lean-library link interface, which Lake propagates through
-ordinary imports to downstream libraries, executables, tests, and module setup
-data. The system dependencies in the table above remain prerequisites.
+Consumers do not repeat BLAS/LAPACK, Fortran, or Accelerate linker flags. On
+macOS and Linux, the package builds and exports a resolved solver shared
+library. On Windows, it exports a combined CSDP/bridge archive plus the
+OpenBLAS DLL, avoiding unsafe allocation across different C
+runtimes. Lake propagates these provider-owned artifacts through ordinary
+imports to downstream libraries, executables, tests, and module setup data.
+The system dependencies in the table above remain prerequisites.
 
 On Windows, the MinGW OpenBLAS and Fortran runtime DLLs must be discoverable by
 the process loading CSDP (normally by keeping `$MINGW_PREFIX/bin` on `PATH`).

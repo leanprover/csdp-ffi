@@ -62,13 +62,21 @@ private def blasLapackLinkArgs (pkgDir : FilePath) : IO (Array String) := do
     return linkSearchArgs (configured ++ linuxLibDirs) ++
       #["-llapack", "-lblas", "-l:libgfortran.so.5", "-lm"]
 
-private def windowsOpenblasImportLib (pkgDir : FilePath) : IO FilePath := do
-  let dirs := (← configuredLibDirs) ++ windowsLibDirs pkgDir
+private def windowsOpenblasDll (pkgDir : FilePath) : IO FilePath := do
+  let configured ← configuredLibDirs
+  let libDirs := configured ++ windowsLibDirs pkgDir
+  let siblingBins := libDirs.filterMap fun dir =>
+    dir.parent.map (· / "bin")
+  let mut dirs := configured ++ siblingBins
+  let mingwRoot? ← IO.getEnv "MINGW_PREFIX"
+  if let some mingwRoot := mingwRoot? then
+    dirs := dirs.push ((mingwRoot : FilePath) / "bin")
+  dirs := dirs.push "C:/msys64/mingw64/bin"
   for dir in dirs do
-    let path := dir / "libopenblas.dll.a"
+    let path := dir / "libopenblas.dll"
     if ← path.pathExists then
       return path
-  throw <| IO.userError s!"csdp-ffi: could not find libopenblas.dll.a in:
+  throw <| IO.userError s!"csdp-ffi: could not find libopenblas.dll in:
     {dirs.toList}"
 
 private def dirContainsPrefix (dir : FilePath) (prefixes : Array String) :
@@ -222,11 +230,10 @@ target csdpStatic (pkg) : FilePath := do
   let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps)
   buildStaticLib (pkg.staticLibDir / name) csdpOs
 
-/-- Platform shared library that owns the CSDP FFI implementation and resolves
-its BLAS/LAPACK/Fortran (or Accelerate) dependencies at the provider boundary.
-Exporting this `Dynlib` lets Lake propagate one native artifact through
-ordinary Lean imports, without exposing raw platform linker flags to consumers.
--/
+/-- macOS/Linux shared library that owns the CSDP solver and resolves its
+BLAS/LAPACK/Fortran (or Accelerate) dependencies at the provider boundary.
+Windows uses the combined bridge archive and OpenBLAS artifact below to avoid
+cross-runtime allocation. -/
 target csdpDynlib pkg : Dynlib := do
   let staticJob ← csdpStatic.fetch
   let linkArgs ← blasLapackLinkArgs pkg.dir
@@ -245,12 +252,12 @@ target csdpDynlib pkg : Dynlib := do
       compileSharedLib path (wholeArchiveArgs ++ linkArgs) "cc"
     return {path := artifact.path, name := "csdp"}
 
-/-- The Windows OpenBLAS import library as an exported link artifact. CSDP and
+/-- The Windows OpenBLAS DLL as an exported link artifact. CSDP and
 the Lean bridge remain in one native archive on Windows so allocations never
 cross the MinGW/Lean C-runtime boundary; this artifact supplies their external
 BLAS/LAPACK symbols without leaking raw flags to consumers. -/
 target windowsOpenblas pkg : Dynlib := do
-  let path ← windowsOpenblasImportLib pkg.dir
+  let path ← windowsOpenblasDll pkg.dir
   let input ← inputFile path false
   return input.map fun path => ({path, name := "openblas"} : Dynlib)
 
@@ -303,7 +310,7 @@ On macOS and Linux, the CSDP Lean library exports the resolved solver and Lean
 bridge as ordered `Dynlib`s. On Windows, the bridge archive also contains the
 solver: keeping both sides of CSDP-owned allocations in the same binary avoids
 cross-runtime heap corruption. Native targets link that archive and the
-exported OpenBLAS import library; editor and interpreter processes load its
+exported OpenBLAS DLL; editor and interpreter processes load its
 combined DLL. Windows modules are not individually precompiled so native
 executables do not acquire the interpreter bridge's `libInit_shared.dll`
 dependency. Library shared facets remain available to downstream precompiled
