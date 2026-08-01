@@ -182,6 +182,14 @@ jobs:
               echo "DLL imports for $binary:"
               objdump -p "$binary" | grep 'DLL Name' || true
             done
+            echo "Recursive loader check:"
+            cygcheck .lake/build/bin/csdp-example.exe || true
+            cp .lake/build/lib/*.dll .lake/build/bin/
+            cp "$MINGW_PREFIX/bin"/*.dll .lake/build/bin/
+            lean_prefix="$(lean --print-prefix)"
+            cp "$lean_prefix/lib/lean"/*.dll .lake/build/bin/
+            .lake/build/bin/csdp-example.exe
+            echo "direct retry after colocating DLLs: $?"
             exit "$rc"
           fi
           ./scripts/test-downstream.sh
