@@ -264,7 +264,10 @@ target windowsOpenblas pkg : Dynlib := do
 /-- Lean ↔ C bridge archive used both to construct the shared bridge and to
 provide native executables with bridge code bound directly to their runtime. -/
 target csdpBridgeStatic (pkg) : FilePath := do
-  let name := nameToStaticLib "csdp_bridge"
+  -- Give the Windows archive a link-only basename distinct from the
+  -- interpreter DLL. This makes `-lcsdp_bridge_link` unambiguously static.
+  let name := nameToStaticLib <|
+    if System.Platform.isWindows then "csdp_bridge_link" else "csdp_bridge"
   let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg)
   if System.Platform.isWindows then
     let nativeDeps ← checkNativeDepsJob pkg
@@ -282,10 +285,21 @@ target csdpBridgeDynlib pkg : Dynlib := do
   if System.Platform.isWindows then
     let openblasJob ← windowsOpenblas.fetch
     let linkArgs ← blasLapackLinkArgs pkg.dir
-    openblasJob.bindM (sync := true) fun openblas => do
-      let sharedJob ← buildLeanSharedLibOfStatic bridgeJob #[] linkArgs
-      sharedJob.mapM fun path =>
-        return {path, name := "csdp_bridge", deps := #[openblas]}
+    bridgeJob.bindM (sync := true) fun bridge => do
+    openblasJob.mapM fun openblas => do
+      addPureTrace linkArgs "native link arguments"
+      addPlatformTrace
+      let path := pkg.staticLibDir / nameToSharedLib "csdp_bridge"
+      let artifact ← buildArtifactUnlessUpToDate path (ext := sharedLibExt)
+          (restore := true) do
+        let lean ← getLeanInstall
+        let args :=
+          #["-Wl,--whole-archive", bridge.toString,
+            "-Wl,--no-whole-archive"] ++
+          linkArgs ++ #["-L", lean.leanLibDir.toString] ++
+          lean.ccLinkSharedFlags
+        compileSharedLib path args lean.cc
+      return {path := artifact.path, name := "csdp_bridge", deps := #[openblas]}
   else
     let csdpJob ← csdpDynlib.fetch
     csdpJob.bindM (sync := true) fun csdp => do
@@ -295,6 +309,13 @@ target csdpBridgeDynlib pkg : Dynlib := do
       let sharedJob ← buildLeanSharedLibOfStatic bridgeJob #[] linkArgs
       sharedJob.mapM fun path =>
         return {path, name := "csdp_bridge", deps := #[csdp]}
+
+/-- Windows link view of the bridge. Lake records the loadable
+`csdp_bridge.dll` path in module setup, while `-lcsdp_bridge_link` can only
+select the distinct combined static archive. -/
+target windowsBridgeLink _pkg : Dynlib := do
+  let bridgeJob ← csdpBridgeDynlib.fetch
+  return bridgeJob.map fun bridge => {bridge with name := "csdp_bridge_link"}
 
 /-- Check that the platform BLAS/LAPACK runtime expected by `lake build`
 is visible before invoking the native linker. -/
@@ -333,11 +354,11 @@ lean_lib CSDP where
     if System.Platform.isWindows then #[] else #[`@/csdpBridgeStatic]
   moreLinkLibs :=
     if System.Platform.isWindows then
-      -- The bridge target builds both `csdp_bridge.a` and
-      -- `csdp_bridge.dll`. MinGW's `-lcsdp_bridge` prefers the archive for
-      -- module/executable links, while Lake records and loads the DLL path
-      -- for interpreter setup.
-      #[`@/csdpBridgeDynlib]
+      -- The bridge targets build both `csdp_bridge_link.a` and
+      -- `csdp_bridge.dll`. The distinct `csdp_bridge_link` name selects only
+      -- the combined archive for module/executable links, while Lake records
+      -- and loads the DLL path for interpreter setup.
+      #[`@/windowsBridgeLink]
     else
       #[`@/csdpDynlib, `@/csdpBridgeDynlib]
 
