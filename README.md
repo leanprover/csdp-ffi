@@ -55,7 +55,7 @@ each platform.
 git clone https://github.com/leanprover/csdp-ffi
 cd csdp-ffi
 lake build
-.lake/build/bin/csdp-example   # Lean runs the SDP and prints the result
+lake exe csdp-example   # Lean runs the SDP and prints the result
 ```
 
 If the native dependency setup is unclear, run the preflight check:
@@ -80,41 +80,42 @@ On Windows the lakefile expects the OpenBLAS import library at
 `vendor/mingw-libs/`; the CI workflow stages it from `$MINGW_PREFIX/lib`
 and you can do the same locally before `lake build`.
 
+For a non-standard installation (for example Nix), set
+`CSDP_NATIVE_LIB_DIRS` to the platform-separated list of directories
+containing BLAS, LAPACK, and the gfortran runtime. This affects only the
+provider-owned CSDP build; consumers still do not add link flags.
+
 ## Using `csdp-ffi` as a Lake dependency
 
-Lake does not propagate transitive native-link arguments from a
-dependency to a downstream package's link step. Consumers that build
-their own `lean_exe` or `lean_lib` against `CSDP` must add the
-BLAS/LAPACK link arguments themselves:
+Add the package normally and import `CSDP`:
 
 ```lean
 import Lake
-open System Lake DSL
-
--- Replicate the same per-platform args csdp-ffi's lakefile uses.
-def blasLapackLinkArgs : Array String :=
-  if System.Platform.isOSX then
-    #["-Wl,-syslibroot,/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
-      "-framework", "Accelerate"]
-  else if System.Platform.isWindows then
-    #["-Lvendor/mingw-libs", "-LC:/msys64/mingw64/lib",
-      "-lopenblas", "-lgfortran", "-lquadmath", "-lm"]
-  else
-    #["-L/usr/lib/x86_64-linux-gnu", "-L/usr/lib/aarch64-linux-gnu",
-      "-L/usr/lib64", "-L/usr/lib",
-      "-llapack", "-lblas", "-l:libgfortran.so.5", "-lm"]
+open Lake DSL
 
 require CSDP from git
   "https://github.com/leanprover/csdp-ffi" @ "main"
 
-lean_exe my_tool where
-  root := `Main
-  moreLinkArgs := blasLapackLinkArgs
+lean_lib MyLibrary
 ```
 
-If your downstream code uses `precompileModules := true`, add
-`moreLinkArgs := blasLapackLinkArgs` to the corresponding `lean_lib`
-declaration too.
+Consumers do not repeat BLAS/LAPACK, Fortran, or Accelerate linker flags.
+The package builds a resolved platform shared library and exports that artifact
+through CSDP's Lean-library link interface, which Lake propagates through
+ordinary imports to downstream libraries, executables, tests, and module setup
+data. The system dependencies in the table above remain prerequisites.
+
+On Windows, the MinGW OpenBLAS and Fortran runtime DLLs must be discoverable by
+the process loading CSDP (normally by keeping `$MINGW_PREFIX/bin` on `PATH`).
+The csdp-ffi shared library itself is located through Lake's generated setup
+and runtime paths. Run produced executables with `lake exe <target>` so Lake
+adds package shared-library directories to `PATH`.
+
+The package's cross-platform CI includes a `platformIndependent := true`
+downstream fixture with no native configuration. It exercises plain and
+precompiled Lean libraries, the test driver, a native executable, an explicit
+Lean `--setup` invocation, and regeneration of a missing platform CSDP artifact
+without rebuilding the portable consumer olean.
 
 ## Repository layout
 
@@ -126,6 +127,9 @@ CSDP/Basic.lean        # Lean-side types + opaque FFI declarations
 Main.lean              # Worked example exercised in CI
 lakefile.lean          # Build configuration
 scripts/install-toolchain.sh  # Lean toolchain installer with GitHub-release fallback
+scripts/test-downstream.sh     # Flag-free downstream and cache-boundary checks
+scripts/test-lsp.py            # `lake serve` native-loading smoke test
+tests/downstream/              # Platform-independent consumer fixture
 ```
 
 ## Licence

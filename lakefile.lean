@@ -20,35 +20,6 @@ Linker arguments for the BLAS / LAPACK runtime CSDP requires.
 def macSdkPath : String :=
   "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
 
-def blasLapackLinkArgs : Array String :=
-  if System.Platform.isOSX then
-    -- Pass the SDK path as a linker flag so it overrides Lake's earlier
-    -- `--sysroot` pointing at the Lean toolchain.
-    #[s!"-Wl,-syslibroot,{macSdkPath}", "-framework", "Accelerate"]
-  else if System.Platform.isWindows then
-    -- The MSYS2 mingw64 install dir varies (default `C:\msys64`, GitHub
-    -- runner setup-msys2 places it under `RUNNER_TEMP`). To avoid hard
-    -- coding either, callers are expected to populate `vendor/mingw-libs`
-    -- under the package root with the runtime libraries (CI does this).
-    -- Local installs at the standard location are also picked up.
-    #["-Lvendor/mingw-libs",
-      "-LC:/msys64/mingw64/lib",
-      "-lopenblas", "-lgfortran", "-lquadmath", "-lm"]
-  else
-    -- Linux: reference BLAS + LAPACK packages plus the gfortran runtime
-    -- (LAPACK is Fortran code). Lean's bundled clang sets `--sysroot` to
-    -- the toolchain dir, so system library paths need to be added
-    -- explicitly. We probe the standard Debian/Ubuntu and Red Hat /
-    -- Fedora locations.
-    -- We use `-l:libgfortran.so.5` (the SONAME of the runtime library) so
-    -- linking does not depend on the gfortran-dev package being installed
-    -- and leaving a `libgfortran.so` symlink behind.
-    #[ "-L/usr/lib/x86_64-linux-gnu",
-       "-L/usr/lib/aarch64-linux-gnu",
-       "-L/usr/lib64",
-       "-L/usr/lib",
-       "-llapack", "-lblas", "-l:libgfortran.so.5", "-lm" ]
-
 def linuxLibDirs : Array FilePath := #[
   "/usr/lib/x86_64-linux-gnu",
   "/usr/lib/aarch64-linux-gnu",
@@ -60,6 +31,36 @@ def windowsLibDirs (pkgDir : FilePath) : Array FilePath := #[
   pkgDir / "vendor" / "mingw-libs",
   "C:/msys64/mingw64/lib"
 ]
+
+/-- Optional search paths for non-standard installations, notably Nix. The
+value uses the platform's ordinary search-path separator. -/
+private def configuredLibDirs : IO (Array FilePath) := do
+  let some value ← IO.getEnv "CSDP_NATIVE_LIB_DIRS"
+    | return #[]
+  return (System.SearchPath.parse value).toArray
+
+private def linkSearchArgs (dirs : Array FilePath) : Array String :=
+  dirs.map fun dir => s!"-L{dir}"
+
+private def blasLapackLinkArgs (pkgDir : FilePath) : IO (Array String) := do
+  let configured ← configuredLibDirs
+  if System.Platform.isOSX then
+    -- Pass the SDK path as a linker flag so it overrides Lake's earlier
+    -- `--sysroot` pointing at the Lean toolchain.
+    return #[s!"-Wl,-syslibroot,{macSdkPath}", "-framework", "Accelerate"]
+  else if System.Platform.isWindows then
+    -- The MSYS2 mingw64 install dir varies (default `C:\msys64`, GitHub
+    -- runner setup-msys2 places it under `RUNNER_TEMP`). CI stages import
+    -- libraries under the package root; standard local installs are also
+    -- searched.
+    return linkSearchArgs (configured ++ windowsLibDirs pkgDir) ++
+      #["-lopenblas", "-lgfortran", "-lquadmath", "-lm"]
+  else
+    -- We use `-l:libgfortran.so.5` (the SONAME of the runtime library) so
+    -- linking does not depend on the gfortran-dev package leaving an
+    -- unversioned `libgfortran.so` symlink behind.
+    return linkSearchArgs (configured ++ linuxLibDirs) ++
+      #["-llapack", "-lblas", "-l:libgfortran.so.5", "-lm"]
 
 private def dirContainsPrefix (dir : FilePath) (prefixes : Array String) :
     IO Bool := do
@@ -97,7 +98,7 @@ private def missingNativeDepsMessage (pkgDir : FilePath) : IO (Option String) :=
         sudo mkdir -p /Library/Developer/CommandLineTools/SDKs\n\
         sudo ln -sfn $(xcrun --show-sdk-path) {macSdkPath}"
   else if System.Platform.isWindows then
-    let dirs := windowsLibDirs pkgDir
+    let dirs := (← configuredLibDirs) ++ windowsLibDirs pkgDir
     let openblasOk ← someDirContainsPrefix dirs #["libopenblas", "openblas"]
     let gfortranOk ← someDirContainsPrefix dirs #["libgfortran", "gfortran"]
     let quadmathOk ← someDirContainsPrefix dirs #["libquadmath", "quadmath"]
@@ -113,13 +114,14 @@ private def missingNativeDepsMessage (pkgDir : FilePath) : IO (Option String) :=
       libopenblas*, libgfortran*, and libquadmath* files from \
       $MINGW_PREFIX/lib into vendor/mingw-libs/ before running lake build."
   else
-    let lapackOk ← someDirContainsPrefix linuxLibDirs #["liblapack.so", "liblapack.a"]
-    let blasOk ← someDirContainsPrefix linuxLibDirs #["libblas.so", "libblas.a"]
+    let dirs := (← configuredLibDirs) ++ linuxLibDirs
+    let lapackOk ← someDirContainsPrefix dirs #["liblapack.so", "liblapack.a"]
+    let blasOk ← someDirContainsPrefix dirs #["libblas.so", "libblas.a"]
     -- The link arg is `-l:libgfortran.so.5`, which requires that exact
     -- filename; matching the prefix would falsely pass when only a
     -- versioned file like `libgfortran.so.5.0.0` is present without the
     -- SONAME symlink.
-    let gfortranOk ← someDirContainsExact linuxLibDirs "libgfortran.so.5"
+    let gfortranOk ← someDirContainsExact dirs "libgfortran.so.5"
     if lapackOk && blasOk && gfortranOk then
       return none
     return some "csdp-ffi: missing Linux native dependencies for CSDP.\n\n\
@@ -131,7 +133,9 @@ private def missingNativeDepsMessage (pkgDir : FilePath) : IO (Option String) :=
         sudo dnf install lapack-devel blas-devel gcc-gfortran\n\n\
       The lakefile links with -llapack -lblas -l:libgfortran.so.5, so the \
       corresponding development/runtime packages must be visible to the \
-      system linker."
+      system linker. For a non-standard installation, set \
+      CSDP_NATIVE_LIB_DIRS to a platform search-path list of library \
+      directories."
 
 private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
   Job.async (caption := "csdp-ffi native dependency check") do
@@ -140,12 +144,14 @@ private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
       error msg
 
 package CSDP where
-  -- Forwarded to every link command in the package, including the
-  -- `:shared` derivations Lake generates from each `extern_lib`. Without
-  -- this, building `csdp.dll` on Windows fails to resolve BLAS / LAPACK
-  -- symbols (Windows DLLs require all symbols at link time, unlike the
-  -- `dynamic_lookup` used on macOS or the equivalent on Linux).
-  moreLinkArgs := blasLapackLinkArgs
+  /- These arguments are intentionally private to this package's own link
+  steps. In particular, Lake uses them when deriving the interpreter-side
+  shared library for `csdpBridge`; downstream targets receive the resolved
+  `csdpDynlib` artifact instead of these raw arguments. -/
+  moreLinkArgs := #[
+    "-L", (__dir__ / defaultBuildDir / defaultNativeLibDir).toString,
+    "-lcsdp"
+  ]
 
 /-! ## CSDP object compilation. -/
 
@@ -186,12 +192,12 @@ private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit) (src : String) :
 
 def bridgeSrcs : Array String := #["lean_csdp.c", "lean_csdp_bridge.c"]
 
-private def bridgeOTarget (pkg : Package) (nativeDeps : Job Unit) (src : String) :
+private def bridgeOTarget (pkg : Package) (src : String) :
     FetchM (Job FilePath) := do
   let stem := src.dropEnd 2
   let oFile := pkg.dir / defaultBuildDir / "ffi" / s!"{stem}.o"
   let srcTarget ← inputTextFile <| pkg.dir / "ffi" / src
-  buildFileAfterDep oFile (srcTarget.add nativeDeps) fun srcFile => do
+  buildFileAfterDep oFile srcTarget fun srcFile => do
     let leanInc := (← getLeanIncludeDir).toString
     let csdpInc := (pkg.dir / "vendored" / "csdp" / "include").toString
     let ffiInc  := (pkg.dir / "ffi").toString
@@ -202,20 +208,53 @@ private def bridgeOTarget (pkg : Package) (nativeDeps : Job Unit) (src : String)
       "-I", ffiInc
     ]
 
-/--
-Single combined static library containing both the CSDP solver objects and
-the Lean ↔ CSDP bridge. Lake produces a `:shared` derivation per
-`extern_lib`; each derivation must resolve all of its symbols against
-its own arguments. By bundling the bridge with CSDP, the resulting
-shared library only has BLAS/LAPACK as an external dependency, which the
-package-level `moreLinkArgs` provides.
--/
-extern_lib csdp (pkg) := do
+/-- Private archive containing the CSDP solver.
+
+This is deliberately a custom target rather than an `extern_lib`: registering
+the unresolved archive as an `extern_lib` would make Lake add it to every
+downstream executable without also propagating its BLAS/LAPACK link arguments.
+Only the fully resolved shared artifact below is part of CSDP's exported link
+interface. -/
+target csdpStatic (pkg) : FilePath := do
   let name := nameToStaticLib "csdp"
   let nativeDeps ← checkNativeDepsJob pkg
   let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps)
-  let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg nativeDeps)
-  buildStaticLib (pkg.staticLibDir / name) (csdpOs ++ bridgeOs)
+  buildStaticLib (pkg.staticLibDir / name) csdpOs
+
+/-- Platform shared library that owns the CSDP FFI implementation and resolves
+its BLAS/LAPACK/Fortran (or Accelerate) dependencies at the provider boundary.
+Exporting this `Dynlib` lets Lake propagate one native artifact through
+ordinary Lean imports, without exposing raw platform linker flags to consumers.
+-/
+target csdpDynlib pkg : Dynlib := do
+  let staticJob ← csdpStatic.fetch
+  let linkArgs ← blasLapackLinkArgs pkg.dir
+  staticJob.mapM fun staticLib => do
+    addPureTrace linkArgs "native link arguments"
+    addPlatformTrace
+    let path := pkg.staticLibDir / nameToSharedLib "csdp"
+    let artifact ← buildArtifactUnlessUpToDate path (ext := sharedLibExt)
+        (restore := true) do
+      let wholeArchiveArgs :=
+        if System.Platform.isOSX then
+          #[s!"-Wl,-force_load,{staticLib}"]
+        else
+          #["-Wl,--whole-archive", staticLib.toString,
+            "-Wl,--no-whole-archive"]
+      compileSharedLib path (wholeArchiveArgs ++ linkArgs) "cc"
+    return {path := artifact.path, name := "csdp"}
+
+/-- Lean ↔ C bridge kept separate from the resolved solver library. Lake links
+this archive into native executables, where its Lean runtime references bind to
+the executable's runtime, and derives an interpreter plugin for module setup.
+The target depends on `csdpDynlib` so that the plugin's package-local `-lcsdp`
+argument always names an already built artifact. -/
+extern_lib csdpBridge (pkg) := do
+  let name := nameToStaticLib "csdp_bridge"
+  let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg)
+  let bridgeJob ← buildStaticLib (pkg.staticLibDir / name) bridgeOs
+  let csdpJob ← csdpDynlib.fetch
+  return bridgeJob.add (csdpJob.map fun _ => ())
 
 /-- Check that the platform BLAS/LAPACK runtime expected by `lake build`
 is visible before invoking the native linker. -/
@@ -229,19 +268,16 @@ script checkNativeDeps (_args) do
 
 /-! ## Lean library and executables.
 
-`extern_lib csdp` produces a static-library target that Lake
-automatically links into the package's Lean modules and executables.
-We don't manually reference the static lib's path here — that
-breaks downstream consumption (the relative path resolves to the
-consumer's cwd, not csdp-ffi's). The `moreLinkArgs` only adds the
-BLAS/LAPACK runtime linker args, which Lake doesn't infer.
+The CSDP Lean library exports the resolved solver through `moreLinkLibs`. The
+small `csdpBridge` extern library is static-linked into native targets and
+loaded through the ordinary precompiled-module setup path for the interpreter
+and editor.
 -/
 
 @[default_target]
 lean_lib CSDP where
   precompileModules := true
-  moreLinkArgs := blasLapackLinkArgs
+  moreLinkLibs := #[`@/csdpDynlib]
 
 lean_exe «csdp-example» where
   root := `Main
-  moreLinkArgs := blasLapackLinkArgs
