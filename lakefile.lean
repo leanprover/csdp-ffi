@@ -143,20 +143,7 @@ private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
     if let some msg ← missingNativeDepsMessage pkg.dir then
       error msg
 
-private def csdpArtifactLinkArgs : Array String :=
-  let dir := __dir__ / defaultBuildDir / defaultNativeLibDir
-  let search := #["-L", dir.toString]
-  if System.Platform.isWindows then
-    search ++ #["-lcsdp"]
-  else
-    search ++ #[s!"-Wl,-rpath,{dir}", "-lcsdp"]
-
-package CSDP where
-  /- These arguments are intentionally private to this package's own link
-  steps. In particular, Lake uses them when deriving the interpreter-side
-  shared library for `csdpBridge`; downstream targets receive the resolved
-  `csdpDynlib` artifact instead of these raw arguments. -/
-  moreLinkArgs := csdpArtifactLinkArgs
+package CSDP
 
 /-! ## CSDP object compilation. -/
 
@@ -249,17 +236,31 @@ target csdpDynlib pkg : Dynlib := do
       compileSharedLib path (wholeArchiveArgs ++ linkArgs) "cc"
     return {path := artifact.path, name := "csdp"}
 
-/-- Lean ↔ C bridge kept separate from the resolved solver library. Lake links
-this archive into native executables, where its Lean runtime references bind to
-the executable's runtime, and derives an interpreter plugin for module setup.
-The target depends on `csdpDynlib` so that the plugin's package-local `-lcsdp`
-argument always names an already built artifact. -/
-extern_lib csdpBridge (pkg) := do
+/-- Lean ↔ C bridge archive used both to construct the shared bridge and to
+provide native executables with bridge code bound directly to their runtime. -/
+target csdpBridgeStatic (pkg) : FilePath := do
   let name := nameToStaticLib "csdp_bridge"
   let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg)
-  let bridgeJob ← buildStaticLib (pkg.staticLibDir / name) bridgeOs
+  buildStaticLib (pkg.staticLibDir / name) bridgeOs
+
+/-- Lean ↔ C bridge with an explicit dependency on the solver DLL. Module setup
+loads `csdpDynlib` before this bridge on Windows. The shared object deliberately
+leaves its Lean runtime references unresolved so they bind to the host editor,
+interpreter, or executable rather than introducing a second Lean runtime. -/
+target csdpBridgeDynlib pkg : Dynlib := do
+  let bridgeJob ← csdpBridgeStatic.fetch
   let csdpJob ← csdpDynlib.fetch
-  return bridgeJob.add (csdpJob.map fun _ => ())
+  csdpJob.bindM (sync := true) fun csdp => do
+    let dir := csdp.dir?.getD pkg.staticLibDir
+    let search := #["-L", dir.toString]
+    let linkArgs :=
+      if System.Platform.isWindows then
+        search ++ #[s!"-l{csdp.name}"]
+      else
+        search ++ #[s!"-Wl,-rpath,{dir}", s!"-l{csdp.name}"]
+    let sharedJob ← buildLeanSharedLibOfStatic bridgeJob #[] linkArgs
+    sharedJob.mapM fun path =>
+      return {path, name := "csdp_bridge", deps := #[csdp]}
 
 /-- Check that the platform BLAS/LAPACK runtime expected by `lake build`
 is visible before invoking the native linker. -/
@@ -273,16 +274,18 @@ script checkNativeDeps (_args) do
 
 /-! ## Lean library and executables.
 
-The CSDP Lean library exports the resolved solver through `moreLinkLibs`. The
-small `csdpBridge` extern library is static-linked into native targets and
-loaded through the ordinary precompiled-module setup path for the interpreter
-and editor.
+The CSDP Lean library exports the resolved solver and Lean bridge as ordered
+`Dynlib`s. Editor and interpreter processes load the bridge after its solver
+dependency. Native targets additionally link the bridge archive so the bridge's
+Lean references bind directly to the executable runtime.
 -/
 
 @[default_target]
 lean_lib CSDP where
   precompileModules := true
-  moreLinkLibs := #[`@/csdpDynlib]
+  dynlibs := #[`@/csdpDynlib, `@/csdpBridgeDynlib]
+  moreLinkObjs := #[`@/csdpBridgeStatic]
+  moreLinkLibs := #[`@/csdpDynlib, `@/csdpBridgeDynlib]
 
 lean_exe «csdp-example» where
   root := `Main
