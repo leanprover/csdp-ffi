@@ -132,7 +132,6 @@ jobs:
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-gcc-fortran
-            mingw-w64-x86_64-gdb
             git
             curl
             unzip
@@ -169,34 +168,7 @@ jobs:
           rc=$?
           tail -20 /tmp/csdp.out
           if [ "$rc" -ne 0 ]; then
-            echo "lake environment:"
-            lake env | grep -E '^(PATH|LEAN_SYSROOT)='
-            echo "package DLLs:"
-            find .lake/build -type f -iname '*.dll' -print
-            echo "runtime DLLs:"
-            find "$MINGW_PREFIX/bin" -maxdepth 1 -type f \
-              \( -iname '*openblas*.dll' -o -iname '*gfortran*.dll' \
-                 -o -iname '*quadmath*.dll' -o -iname '*winpthread*.dll' \
-                 -o -iname '*gcc*.dll' \) -print
-            for binary in .lake/build/bin/csdp-example.exe \
-                .lake/build/lib/csdp.dll .lake/build/lib/csdp_bridge.dll; do
-              echo "DLL imports for $binary:"
-              objdump -p "$binary" | grep 'DLL Name' || true
-            done
-            echo "Recursive loader check:"
-            lake env cygcheck .lake/build/bin/csdp-example.exe || true
-            lake env where.exe csdp.dll || true
-            lake env where.exe csdp_bridge.dll || true
-            lake env where.exe libInit_shared.dll || true
-            lake env gdb --batch -ex run -ex "thread apply all bt" \
-              --args .lake/build/bin/csdp-example.exe || true
-            cp .lake/build/lib/*.dll .lake/build/bin/
-            cp "$MINGW_PREFIX/bin"/*.dll .lake/build/bin/
-            lean_prefix="$(cygpath -u "$(lean --print-prefix)")"
-            cp "$lean_prefix/lib/lean"/*.dll .lake/build/bin/
-            cygcheck .lake/build/bin/csdp-example.exe || true
-            .lake/build/bin/csdp-example.exe
-            echo "direct retry after colocating DLLs: $?"
             exit "$rc"
           fi
+          set -e
           ./scripts/test-downstream.sh
