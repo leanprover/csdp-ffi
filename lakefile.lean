@@ -273,18 +273,6 @@ target csdpBridgeStatic (pkg) : FilePath := do
   else
     buildStaticLib (pkg.staticLibDir / name) bridgeOs
 
-/-- Windows link-library view of the combined bridge archive. Lake deliberately
-omits a library's `moreLinkObjs` when it builds per-module DLLs, but it does
-include `moreLinkLibs`. Presenting the archive through this interface therefore
-uses the same static code for module DLLs, library shared facets, and native
-executables without making the interpreter bridge DLL a native dependency. -/
-target windowsBridgeLink _pkg : Dynlib := do
-  let bridgeJob ← csdpBridgeStatic.fetch
-  let openblasJob ← windowsOpenblas.fetch
-  bridgeJob.bindM (sync := true) fun bridge => do
-  openblasJob.mapM fun openblas => do
-    return {path := bridge, name := "csdp_bridge", deps := #[openblas]}
-
 /-- Lean ↔ C bridge with an explicit dependency on the solver DLL. Module setup
 loads `csdpDynlib` before this bridge on Windows. The shared object deliberately
 leaves its Lean runtime references unresolved so they bind to the host editor,
@@ -345,7 +333,11 @@ lean_lib CSDP where
     if System.Platform.isWindows then #[] else #[`@/csdpBridgeStatic]
   moreLinkLibs :=
     if System.Platform.isWindows then
-      #[`@/windowsBridgeLink]
+      -- The bridge target builds both `csdp_bridge.a` and
+      -- `csdp_bridge.dll`. MinGW's `-lcsdp_bridge` prefers the archive for
+      -- module/executable links, while Lake records and loads the DLL path
+      -- for interpreter setup.
+      #[`@/csdpBridgeDynlib]
     else
       #[`@/csdpDynlib, `@/csdpBridgeDynlib]
 

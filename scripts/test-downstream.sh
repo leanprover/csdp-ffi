@@ -18,6 +18,18 @@ lake test
 lake build downstream
 lake exe downstream
 
+# On Windows, `csdp_bridge.dll` is the interpreter artifact. Native
+# executables must consume the same-named static archive instead; importing
+# the DLL would introduce a second Lean runtime and a separate C heap.
+if [[ "$(uname -s)" == MINGW* ]]; then
+  exe="$consumer/.lake/build/bin/downstream.exe"
+  if objdump -p "$exe" | grep -Eiq 'csdp_bridge\.dll|libInit_shared\.dll'; then
+    echo "Windows native executable imported the interpreter runtime"
+    objdump -p "$exe" | grep -i 'DLL Name' || true
+    exit 1
+  fi
+fi
+
 # A direct Lean invocation is valid when it consumes the setup data Lake made
 # for the module. This is the same native-loading path used by Lake's driver.
 lake env lean DownstreamTest.lean \
