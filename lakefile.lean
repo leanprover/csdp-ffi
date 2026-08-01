@@ -277,15 +277,22 @@ script checkNativeDeps (_args) do
 The CSDP Lean library exports the resolved solver and Lean bridge as ordered
 `Dynlib`s. Editor and interpreter processes load the bridge after its solver
 dependency. Native targets additionally link the bridge archive so the bridge's
-Lean references bind directly to the executable runtime.
+Lean references bind directly to the executable runtime. On Windows, modules
+are not individually precompiled: their DLLs would force native executables to
+load the interpreter bridge and its `libInit_shared.dll` dependency. Library
+shared facets remain available for downstream precompiled consumers.
 -/
 
 @[default_target]
 lean_lib CSDP where
-  precompileModules := true
+  precompileModules := !System.Platform.isWindows
   dynlibs := #[`@/csdpDynlib, `@/csdpBridgeDynlib]
   moreLinkObjs := #[`@/csdpBridgeStatic]
-  moreLinkLibs := #[`@/csdpDynlib, `@/csdpBridgeDynlib]
+  moreLinkLibs :=
+    if System.Platform.isWindows then
+      #[`@/csdpDynlib]
+    else
+      #[`@/csdpDynlib, `@/csdpBridgeDynlib]
 
 lean_exe «csdp-example» where
   root := `Main
