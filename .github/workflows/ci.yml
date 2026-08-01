@@ -168,6 +168,20 @@ jobs:
           rc=$?
           tail -20 /tmp/csdp.out
           if [ "$rc" -ne 0 ]; then
+            echo "lake environment:"
+            lake env | grep -E '^(PATH|LEAN_SYSROOT)='
+            echo "package DLLs:"
+            find .lake/build -type f -iname '*.dll' -print
+            echo "runtime DLLs:"
+            find "$MINGW_PREFIX/bin" -maxdepth 1 -type f \
+              \( -iname '*openblas*.dll' -o -iname '*gfortran*.dll' \
+                 -o -iname '*quadmath*.dll' -o -iname '*winpthread*.dll' \
+                 -o -iname '*gcc*.dll' \) -print
+            for binary in .lake/build/bin/csdp-example.exe \
+                .lake/build/lib/csdp.dll .lake/build/lib/csdp_bridge.dll; do
+              echo "DLL imports for $binary:"
+              objdump -p "$binary" | grep 'DLL Name' || true
+            done
             exit "$rc"
           fi
           ./scripts/test-downstream.sh
