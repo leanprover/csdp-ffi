@@ -8,6 +8,7 @@
  */
 
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -161,9 +162,9 @@ static void blockmatrix_set(struct blockmatrix *M, int bnum, int i, int j,
 /* Count nonzeros per (constraint, block) pair. constraints are 1..k,
  * blocks are 1..nblocks. Output `counts` is row-major: counts[(c-1)*nblocks + (b-1)]. */
 static void count_per_block(int a_nnz, const int *a_constraints,
-                            const int *a_blocks, int num_constraints,
-                            int nblocks, int *counts) {
-  memset(counts, 0, sizeof(int) * (size_t)num_constraints * (size_t)nblocks);
+                            const int *a_blocks, int nblocks,
+                            size_t pair_count, int *counts) {
+  memset(counts, 0, sizeof(int) * pair_count);
   for (int t = 0; t < a_nnz; ++t) {
     int c = a_constraints[t];
     int b = a_blocks[t];
@@ -193,35 +194,47 @@ static int build_constraints(struct constraintmatrix **out,
                              const int *a_constraints, const int *a_blocks,
                              const int *a_i, const int *a_j,
                              const double *a_vals) {
+  size_t pair_count = 0;
+  if (num_constraints < 0 || nblocks < 0 || a_nnz < 0) return 1;
+  if (num_constraints > 0 && nblocks > 0) {
+    size_t constraints_size = (size_t)num_constraints;
+    size_t blocks_size = (size_t)nblocks;
+    size_t max_element_size =
+        sizeof(struct sparseblock *) > sizeof(int)
+            ? sizeof(struct sparseblock *)
+            : sizeof(int);
+    if (constraints_size > SIZE_MAX / blocks_size) return 1;
+    pair_count = constraints_size * blocks_size;
+    if (pair_count > (size_t)PTRDIFF_MAX / max_element_size) return 1;
+  }
+
   struct constraintmatrix *cs = (struct constraintmatrix *)calloc(
       (size_t)num_constraints + 1, sizeof(struct constraintmatrix));
   if (cs == NULL) return 1;
 
   /* Per-(constraint, block) nnz counts to size each sparseblock. */
   int *counts = NULL;
-  if (num_constraints > 0 && nblocks > 0) {
-    counts = (int *)calloc((size_t)num_constraints * (size_t)nblocks,
-                           sizeof(int));
+  if (pair_count > 0) {
+    counts = (int *)calloc(pair_count, sizeof(int));
     if (counts == NULL) {
       free(cs);
       return 1;
     }
-    count_per_block(a_nnz, a_constraints, a_blocks, num_constraints, nblocks,
+    count_per_block(a_nnz, a_constraints, a_blocks, nblocks, pair_count,
                     counts);
   }
 
   /* Allocate one sparseblock per nonempty (c, b) pair, link into list. */
   /* We index per-constraint block pointers so we can append in O(1). */
-  struct sparseblock **block_ptrs = (struct sparseblock **)calloc(
-      (size_t)num_constraints * (size_t)nblocks, sizeof(struct sparseblock *));
-  if (num_constraints > 0 && nblocks > 0 && block_ptrs == NULL) {
+  struct sparseblock **block_ptrs = pair_count == 0 ? NULL :
+      (struct sparseblock **)calloc(pair_count, sizeof(struct sparseblock *));
+  if (pair_count > 0 && block_ptrs == NULL) {
     free(counts);
     free_constraints(cs, num_constraints);
     return 1;
   }
-  int *fill = (int *)calloc((size_t)num_constraints * (size_t)nblocks,
-                            sizeof(int));
-  if (num_constraints > 0 && nblocks > 0 && fill == NULL) {
+  int *fill = pair_count == 0 ? NULL : (int *)calloc(pair_count, sizeof(int));
+  if (pair_count > 0 && fill == NULL) {
     free(counts);
     free(block_ptrs);
     free_constraints(cs, num_constraints);
