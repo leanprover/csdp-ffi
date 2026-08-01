@@ -60,7 +60,16 @@ jobs:
       - name: Test portable backend without writable temporary directory
         run: |
           lake clean
-          CSDP_FORCE_PORTABLE_LINALG=1 TMPDIR=/proc lake build CSDP csdp-example
+          real_cc="$(command -v cc)"
+          probe_dir="$PWD/.lake/build/cc-probe"
+          mkdir -p "$probe_dir" "$PWD/.lake/build/tmp"
+          ln -s "$PWD/scripts/cc-link-temp-probe.sh" "$probe_dir/cc"
+          CSDP_REAL_CC="$real_cc" \
+            CSDP_EXPECTED_LINK_TMP="$PWD/.lake/build/tmp" \
+            CSDP_FORCE_PORTABLE_LINALG=1 \
+            PATH="$probe_dir:$PATH" \
+            TMPDIR=/proc \
+            lake build CSDP csdp-example
           CSDP_FORCE_PORTABLE_LINALG=1 TMPDIR=/proc lake exe csdp-example
 
   macos:

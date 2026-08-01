@@ -182,6 +182,27 @@ private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
 
 package CSDP
 
+/-- Link a shared library with compiler temporaries inside the package build
+directory. Downstream sandboxes may make the system temporary directory
+read-only while still permitting writes under `.lake`. -/
+private def linkShared (pkg : Package) (libFile : FilePath)
+    (linkArgs : Array String) (linker : FilePath := "cc") : LogIO Unit := do
+  createParentDirs libFile
+  let tempDir := pkg.dir / defaultBuildDir / "tmp"
+  createParentDirs (tempDir / "placeholder")
+  let mut env : Array (String × Option String) := #[
+    ("TMPDIR", some tempDir.toString),
+    ("TMP", some tempDir.toString),
+    ("TEMP", some tempDir.toString)
+  ]
+  if System.Platform.isOSX && (← IO.getEnv "MACOSX_DEPLOYMENT_TARGET").isNone then
+    env := env.push ("MACOSX_DEPLOYMENT_TARGET", some "99.0")
+  proc {
+    cmd := linker.toString
+    args := #["-shared", "-o", libFile.toString] ++ (← mkArgs libFile linkArgs)
+    env
+  }
+
 /-! ## CSDP object compilation. -/
 
 def csdpSrcs : Array String := #[
@@ -281,7 +302,7 @@ target csdpDynlib pkg : Dynlib := do
         else
           #["-Wl,--whole-archive", staticLib.toString,
             "-Wl,--no-whole-archive"]
-      compileSharedLib path (wholeArchiveArgs ++ linkArgs) "cc"
+      linkShared pkg path (wholeArchiveArgs ++ linkArgs) "cc"
     return {path := artifact.path, name := "csdp"}
 
 /-- The Windows OpenBLAS DLL as an exported link artifact. CSDP and
@@ -336,7 +357,7 @@ target csdpBridgeDynlib pkg : Dynlib := do
             "-Wl,--no-whole-archive"] ++
           linkArgs ++ #["-L", lean.leanLibDir.toString] ++
           lean.ccLinkSharedFlags
-        compileSharedLib path args lean.cc
+        linkShared pkg path args lean.cc
       return {path := artifact.path, name := "csdp_bridge", deps := #[openblas]}
   else
     let csdpJob ← csdpDynlib.fetch
@@ -344,7 +365,23 @@ target csdpBridgeDynlib pkg : Dynlib := do
       let dir := csdp.dir?.getD pkg.staticLibDir
       let linkArgs :=
         #["-L", dir.toString, s!"-Wl,-rpath,{dir}", s!"-l{csdp.name}"]
-      let sharedJob ← buildLeanSharedLibOfStatic bridgeJob #[] linkArgs
+      let sharedJob ← bridgeJob.mapM fun bridge => do
+        addLeanTrace
+        addPureTrace linkArgs
+        addPlatformTrace
+        let path := bridge.withExtension sharedLibExt
+        buildFileUnlessUpToDate' path do
+          let lean ← getLeanInstall
+          let wholeArchiveArgs :=
+            if System.Platform.isOSX then
+              #[s!"-Wl,-force_load,{bridge}"]
+            else
+              #["-Wl,--whole-archive", bridge.toString,
+                "-Wl,--no-whole-archive"]
+          let args := wholeArchiveArgs ++ linkArgs ++
+            #["-L", lean.leanLibDir.toString] ++ lean.ccLinkSharedFlags
+          linkShared pkg path args lean.cc
+        return path
       sharedJob.mapM fun path =>
         return {path, name := "csdp_bridge", deps := #[csdp]}
 
