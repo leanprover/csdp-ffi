@@ -40,6 +40,11 @@
 #include <math.h>
 #include "declarations.h"
 
+#ifdef CSDP_PORTABLE_LINALG
+double csdp_ffi_pow(double base, double exponent);
+#define pow csdp_ffi_pow
+#endif
+
 #ifdef USEGETTIME
 /*
  * Stuff for keeping track of time.
@@ -2271,5 +2276,4 @@ RETURNCERT:
   return(retcode);
 
 }
-
 

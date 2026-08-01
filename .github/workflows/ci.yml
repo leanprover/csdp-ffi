@@ -57,6 +57,12 @@ jobs:
       - name: Test downstream editor loading
         run: python3 ./scripts/test-lsp.py
 
+      - name: Test portable backend without writable temporary directory
+        run: |
+          lake clean
+          CSDP_FORCE_PORTABLE_LINALG=1 TMPDIR=/proc lake build CSDP csdp-example
+          CSDP_FORCE_PORTABLE_LINALG=1 TMPDIR=/proc lake exe csdp-example
+
   macos:
     name: macOS
     runs-on: macos-latest

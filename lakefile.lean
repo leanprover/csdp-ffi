@@ -42,7 +42,12 @@ private def configuredLibDirs : IO (Array FilePath) := do
 private def linkSearchArgs (dirs : Array FilePath) : Array String :=
   dirs.map fun dir => s!"-L{dir}"
 
-private def blasLapackLinkArgs (pkgDir : FilePath) : IO (Array String) := do
+private def forcePortableLinalg : IO Bool := do
+  let value ← IO.getEnv "CSDP_FORCE_PORTABLE_LINALG"
+  return value.any fun value => value == "1" || value.toLower == "true"
+
+private def blasLapackLinkArgs (pkgDir : FilePath) (portable : Bool := false) :
+    IO (Array String) := do
   let configured ← configuredLibDirs
   if System.Platform.isOSX then
     -- Pass the SDK path as a linker flag so it overrides Lake's earlier
@@ -56,6 +61,8 @@ private def blasLapackLinkArgs (pkgDir : FilePath) : IO (Array String) := do
     return linkSearchArgs (configured ++ windowsLibDirs pkgDir) ++
       #["-lopenblas", "-lgfortran", "-lquadmath", "-lm"]
   else
+    if portable then
+      return #["-lm"]
     -- We use `-l:libgfortran.so.5` (the SONAME of the runtime library) so
     -- linking does not depend on the gfortran-dev package leaving an
     -- unversioned `libgfortran.so` symlink behind.
@@ -154,10 +161,23 @@ private def missingNativeDepsMessage (pkgDir : FilePath) : IO (Option String) :=
       CSDP_NATIVE_LIB_DIRS to a platform search-path list of library \
       directories."
 
+/-- Linux can use a bundled, portable implementation of the small BLAS/LAPACK
+surface CSDP calls when the system libraries are unavailable. This keeps the
+package buildable in restricted downstream sandboxes while retaining tuned
+system libraries whenever they are present. -/
+private def usePortableLinalg (pkgDir : FilePath) : IO Bool := do
+  if System.Platform.isOSX || System.Platform.isWindows then
+    return false
+  if ← forcePortableLinalg then
+    return true
+  return (← missingNativeDepsMessage pkgDir).isSome
+
 private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
   Job.async (caption := "csdp-ffi native dependency check") do
     addPlatformTrace
-    if let some msg ← missingNativeDepsMessage pkg.dir then
+    if ← usePortableLinalg pkg.dir then
+      pure ()
+    else if let some msg ← missingNativeDepsMessage pkg.dir then
       error msg
 
 package CSDP
@@ -176,26 +196,34 @@ def csdpSrcs : Array String := #[
   "writeprob.c", "writesol.c", "zero_mat.c"
 ]
 
-def csdpCFlags (pkg : Package) : Array String :=
+def csdpCFlags (pkg : Package) (portable : Bool) : Array String :=
   let inc := pkg.dir / "vendored" / "csdp" / "include"
   -- CSDP's source uses K&R-style definitions and unprototyped declarations
   -- (`int foo()` meaning "any args"). Modern C compilers default to C23,
   -- where `()` means `(void)` and the K&R bodies are reported as
   -- prototype mismatches. Force gnu89 so the legacy semantics apply, and
   -- silence the residual -W warnings.
-  #[ "-O2", "-DBIT64", "-DNOSHORTS", "-fPIC", "-std=gnu89",
+  let base := #[ "-O2", "-pipe", "-DBIT64", "-DNOSHORTS", "-fPIC", "-std=gnu89",
      "-Wno-implicit-function-declaration",
      "-Wno-deprecated-non-prototype",
      "-Wno-old-style-definition",
      "-I", inc.toString ]
+  if portable then base.push "-DCSDP_PORTABLE_LINALG" else base
 
-private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit) (src : String) :
+private def portableLinalgOTarget (pkg : Package) : FetchM (Job FilePath) := do
+  let oFile := pkg.dir / defaultBuildDir / "ffi" / "portable_linalg.o"
+  let srcTarget ← inputTextFile <| pkg.dir / "ffi" / "portable_linalg.c"
+  buildFileAfterDep oFile srcTarget fun srcFile => do
+    compileO oFile srcFile #["-O2", "-pipe", "-fPIC", "-std=c99"]
+
+private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit)
+    (portable : Bool) (src : String) :
     FetchM (Job FilePath) := do
   let stem := src.dropEnd 2
   let oFile := pkg.dir / defaultBuildDir / "csdp" / s!"{stem}.o"
   let srcTarget ← inputTextFile <| pkg.dir / "vendored" / "csdp" / "lib" / src
   buildFileAfterDep oFile (srcTarget.add nativeDeps) fun srcFile => do
-    compileO oFile srcFile (csdpCFlags pkg)
+    compileO oFile srcFile (csdpCFlags pkg portable)
 
 /-! ## Lean ↔ CSDP bridge. -/
 
@@ -211,7 +239,7 @@ private def bridgeOTarget (pkg : Package) (src : String) :
     let csdpInc := (pkg.dir / "vendored" / "csdp" / "include").toString
     let ffiInc  := (pkg.dir / "ffi").toString
     compileO oFile srcFile #[
-      "-O2", "-DBIT64", "-fPIC",
+      "-O2", "-pipe", "-DBIT64", "-fPIC",
       "-I", leanInc,
       "-I", csdpInc,
       "-I", ffiInc
@@ -227,7 +255,10 @@ interface. -/
 target csdpStatic (pkg) : FilePath := do
   let name := nameToStaticLib "csdp"
   let nativeDeps ← checkNativeDepsJob pkg
-  let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps)
+  let portable ← usePortableLinalg pkg.dir
+  let mut csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps portable)
+  if portable then
+    csdpOs := csdpOs.push (← portableLinalgOTarget pkg)
   buildStaticLib (pkg.staticLibDir / name) csdpOs
 
 /-- macOS/Linux shared library that owns the CSDP solver and resolves its
@@ -236,7 +267,8 @@ Windows uses the combined bridge archive and OpenBLAS artifact below to avoid
 cross-runtime allocation. -/
 target csdpDynlib pkg : Dynlib := do
   let staticJob ← csdpStatic.fetch
-  let linkArgs ← blasLapackLinkArgs pkg.dir
+  let portable ← usePortableLinalg pkg.dir
+  let linkArgs ← blasLapackLinkArgs pkg.dir portable
   staticJob.mapM fun staticLib => do
     addPureTrace linkArgs "native link arguments"
     addPlatformTrace
@@ -277,7 +309,7 @@ target csdpBridgeStatic (pkg) : FilePath := do
   let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg)
   if System.Platform.isWindows then
     let nativeDeps ← checkNativeDepsJob pkg
-    let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps)
+    let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps false)
     buildStaticLib (pkg.staticLibDir / name) (csdpOs ++ bridgeOs)
   else
     buildStaticLib (pkg.staticLibDir / name) bridgeOs
@@ -327,6 +359,9 @@ target windowsBridgeLink _pkg : Dynlib := do
 is visible before invoking the native linker. -/
 script checkNativeDeps (_args) do
   let cwd ← IO.currentDir
+  if ← usePortableLinalg cwd then
+    IO.println "csdp-ffi: using the bundled portable C linear-algebra backend."
+    return 0
   if let some msg ← missingNativeDepsMessage cwd then
     IO.eprintln msg
     return 1
