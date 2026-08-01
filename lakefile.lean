@@ -311,15 +311,17 @@ bridge as ordered `Dynlib`s. On Windows, the bridge archive also contains the
 solver: keeping both sides of CSDP-owned allocations in the same binary avoids
 cross-runtime heap corruption. Native targets link that archive and the
 exported OpenBLAS DLL; editor and interpreter processes load its
-combined DLL. Windows modules are not individually precompiled so native
+combined DLL. Module precompilation remains enabled: that is the Lake
+mechanism which makes an imported library's shared facet available to
+downstream test drivers, `#eval`, and editor processes. It does not change the
+native link inputs selected by `moreLinkObjs` and `moreLinkLibs`, so native
 executables do not acquire the interpreter bridge's `libInit_shared.dll`
-dependency. Library shared facets remain available to downstream precompiled
-consumers.
+dependency.
 -/
 
 @[default_target]
 lean_lib CSDP where
-  precompileModules := !System.Platform.isWindows
+  precompileModules := true
   dynlibs :=
     if System.Platform.isWindows then
       #[`@/csdpBridgeDynlib]
