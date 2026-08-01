@@ -23,6 +23,28 @@ static ptrdiff_t vector_start(int n, int increment)
   return increment < 0 ? (ptrdiff_t)(1 - n) * increment : 0;
 }
 
+/*
+ * Current glibc headers bind `pow` to a GLIBC_2.29 symbol, newer than the
+ * sysroot bundled with some Lean toolchains.  CSDP's inputs here are ordinary
+ * positive finite values, and the longstanding x86-64 ABI implementation has
+ * the required semantics.  Bind that compatibility symbol explicitly so an
+ * object compiled by the host C compiler can still link with Lean's sysroot.
+ */
+#if defined(__GLIBC__) && defined(__x86_64__)
+extern double csdp_glibc_pow(double base, double exponent);
+__asm__(".symver csdp_glibc_pow,pow@GLIBC_2.2.5");
+
+double csdp_ffi_pow(double base, double exponent)
+{
+  return csdp_glibc_pow(base, exponent);
+}
+#else
+double csdp_ffi_pow(double base, double exponent)
+{
+  return pow(base, exponent);
+}
+#endif
+
 double dnrm2_(const int *n, const double *x, const int *incx)
 {
   int i;

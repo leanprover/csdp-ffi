@@ -196,18 +196,19 @@ def csdpSrcs : Array String := #[
   "writeprob.c", "writesol.c", "zero_mat.c"
 ]
 
-def csdpCFlags (pkg : Package) : Array String :=
+def csdpCFlags (pkg : Package) (portable : Bool) : Array String :=
   let inc := pkg.dir / "vendored" / "csdp" / "include"
   -- CSDP's source uses K&R-style definitions and unprototyped declarations
   -- (`int foo()` meaning "any args"). Modern C compilers default to C23,
   -- where `()` means `(void)` and the K&R bodies are reported as
   -- prototype mismatches. Force gnu89 so the legacy semantics apply, and
   -- silence the residual -W warnings.
-  #[ "-O2", "-pipe", "-DBIT64", "-DNOSHORTS", "-fPIC", "-std=gnu89",
+  let base := #[ "-O2", "-pipe", "-DBIT64", "-DNOSHORTS", "-fPIC", "-std=gnu89",
      "-Wno-implicit-function-declaration",
      "-Wno-deprecated-non-prototype",
      "-Wno-old-style-definition",
      "-I", inc.toString ]
+  if portable then base.push "-DCSDP_PORTABLE_LINALG" else base
 
 private def portableLinalgOTarget (pkg : Package) : FetchM (Job FilePath) := do
   let oFile := pkg.dir / defaultBuildDir / "ffi" / "portable_linalg.o"
@@ -215,13 +216,14 @@ private def portableLinalgOTarget (pkg : Package) : FetchM (Job FilePath) := do
   buildFileAfterDep oFile srcTarget fun srcFile => do
     compileO oFile srcFile #["-O2", "-pipe", "-fPIC", "-std=c99"]
 
-private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit) (src : String) :
+private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit)
+    (portable : Bool) (src : String) :
     FetchM (Job FilePath) := do
   let stem := src.dropEnd 2
   let oFile := pkg.dir / defaultBuildDir / "csdp" / s!"{stem}.o"
   let srcTarget ← inputTextFile <| pkg.dir / "vendored" / "csdp" / "lib" / src
   buildFileAfterDep oFile (srcTarget.add nativeDeps) fun srcFile => do
-    compileO oFile srcFile (csdpCFlags pkg)
+    compileO oFile srcFile (csdpCFlags pkg portable)
 
 /-! ## Lean ↔ CSDP bridge. -/
 
@@ -253,8 +255,9 @@ interface. -/
 target csdpStatic (pkg) : FilePath := do
   let name := nameToStaticLib "csdp"
   let nativeDeps ← checkNativeDepsJob pkg
-  let mut csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps)
-  if ← usePortableLinalg pkg.dir then
+  let portable ← usePortableLinalg pkg.dir
+  let mut csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps portable)
+  if portable then
     csdpOs := csdpOs.push (← portableLinalgOTarget pkg)
   buildStaticLib (pkg.staticLibDir / name) csdpOs
 
@@ -306,7 +309,7 @@ target csdpBridgeStatic (pkg) : FilePath := do
   let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg)
   if System.Platform.isWindows then
     let nativeDeps ← checkNativeDepsJob pkg
-    let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps)
+    let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps false)
     buildStaticLib (pkg.staticLibDir / name) (csdpOs ++ bridgeOs)
   else
     buildStaticLib (pkg.staticLibDir / name) bridgeOs
