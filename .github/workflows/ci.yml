@@ -185,7 +185,10 @@ jobs:
             done
             echo "Recursive loader check:"
             lake env cygcheck .lake/build/bin/csdp-example.exe || true
-            gdb --batch -ex run -ex "thread apply all bt" \
+            lake env where.exe csdp.dll || true
+            lake env where.exe csdp_bridge.dll || true
+            lake env where.exe libInit_shared.dll || true
+            lake env gdb --batch -ex run -ex "thread apply all bt" \
               --args .lake/build/bin/csdp-example.exe || true
             cp .lake/build/lib/*.dll .lake/build/bin/
             cp "$MINGW_PREFIX/bin"/*.dll .lake/build/bin/
