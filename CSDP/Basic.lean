@@ -12,6 +12,10 @@
   or an LP-style diagonal block (size n, just the n diagonal entries).
 -/
 
+module
+
+public section
+
 namespace CSDP
 
 /--

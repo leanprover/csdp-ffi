@@ -1,1 +1,3 @@
-import CSDP.Basic
+module
+
+public import CSDP.Basic
