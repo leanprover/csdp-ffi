@@ -273,6 +273,18 @@ target csdpBridgeStatic (pkg) : FilePath := do
   else
     buildStaticLib (pkg.staticLibDir / name) bridgeOs
 
+/-- Windows link-library view of the combined bridge archive. Lake deliberately
+omits a library's `moreLinkObjs` when it builds per-module DLLs, but it does
+include `moreLinkLibs`. Presenting the archive through this interface therefore
+uses the same static code for module DLLs, library shared facets, and native
+executables without making the interpreter bridge DLL a native dependency. -/
+target windowsBridgeLink _pkg : Dynlib := do
+  let bridgeJob ← csdpBridgeStatic.fetch
+  let openblasJob ← windowsOpenblas.fetch
+  bridgeJob.bindM (sync := true) fun bridge => do
+  openblasJob.mapM fun openblas => do
+    return {path := bridge, name := "csdp_bridge", deps := #[openblas]}
+
 /-- Lean ↔ C bridge with an explicit dependency on the solver DLL. Module setup
 loads `csdpDynlib` before this bridge on Windows. The shared object deliberately
 leaves its Lean runtime references unresolved so they bind to the host editor,
@@ -280,10 +292,12 @@ interpreter, or executable rather than introducing a second Lean runtime. -/
 target csdpBridgeDynlib pkg : Dynlib := do
   let bridgeJob ← csdpBridgeStatic.fetch
   if System.Platform.isWindows then
+    let openblasJob ← windowsOpenblas.fetch
     let linkArgs ← blasLapackLinkArgs pkg.dir
-    let sharedJob ← buildLeanSharedLibOfStatic bridgeJob #[] linkArgs
-    sharedJob.mapM fun path =>
-      return {path, name := "csdp_bridge"}
+    openblasJob.bindM (sync := true) fun openblas => do
+      let sharedJob ← buildLeanSharedLibOfStatic bridgeJob #[] linkArgs
+      sharedJob.mapM fun path =>
+        return {path, name := "csdp_bridge", deps := #[openblas]}
   else
     let csdpJob ← csdpDynlib.fetch
     csdpJob.bindM (sync := true) fun csdp => do
@@ -327,10 +341,11 @@ lean_lib CSDP where
       #[`@/csdpBridgeDynlib]
     else
       #[`@/csdpDynlib, `@/csdpBridgeDynlib]
-  moreLinkObjs := #[`@/csdpBridgeStatic]
+  moreLinkObjs :=
+    if System.Platform.isWindows then #[] else #[`@/csdpBridgeStatic]
   moreLinkLibs :=
     if System.Platform.isWindows then
-      #[`@/windowsOpenblas]
+      #[`@/windowsBridgeLink]
     else
       #[`@/csdpDynlib, `@/csdpBridgeDynlib]
 
