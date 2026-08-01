@@ -13,7 +13,9 @@ subject to   tr(Aᵢ · X) = bᵢ        for i = 1, …, k
 ```
 
 CSDP itself (release 6.2.0) is vendored under `vendored/csdp/`; this
-package builds it from source against the system BLAS/LAPACK runtime.
+package builds it from source against the system BLAS/LAPACK runtime when one
+is available. On Linux it falls back to a bundled reference implementation of
+the small BLAS/LAPACK surface used by CSDP.
 
 ## Using
 
@@ -64,15 +66,16 @@ If the native dependency setup is unclear, run the preflight check:
 lake script run checkNativeDeps
 ```
 
-The same check also runs before compiling CSDP's C sources, so a fresh
-`lake build` should fail with platform-specific install instructions
-instead of a bare linker error when BLAS/LAPACK is unavailable.
+The same check also runs before compiling CSDP's C sources. On Linux it reports
+whether the system libraries or the portable fallback will be used; on macOS
+and Windows it fails with platform-specific install instructions when the
+native dependency is unavailable.
 
 System dependencies (matching what CI installs):
 
 | Platform | What you need                                       |
 |----------|-----------------------------------------------------|
-| Linux    | `liblapack-dev libblas-dev gfortran zstd`           |
+| Linux    | Optional: `liblapack-dev libblas-dev gfortran`; `zstd` for the toolchain fallback |
 | macOS    | Apple Command Line Tools (Accelerate framework)     |
 | Windows  | MSYS2 mingw-w64 with `mingw-w64-x86_64-openblas`    |
 
@@ -84,6 +87,8 @@ For a non-standard installation (for example Nix), set
 `CSDP_NATIVE_LIB_DIRS` to the platform-separated list of directories
 containing BLAS, LAPACK, and the gfortran runtime. This affects only the
 provider-owned CSDP build; consumers still do not add link flags.
+Set `CSDP_FORCE_PORTABLE_LINALG=1` to exercise the bundled Linux fallback even
+when system libraries are available.
 
 ## Using `csdp-ffi` as a Lake dependency
 
@@ -105,7 +110,8 @@ library. On Windows, it exports a combined CSDP/bridge archive plus the
 OpenBLAS DLL, avoiding unsafe allocation across different C
 runtimes. Lake propagates these provider-owned artifacts through ordinary
 imports to downstream libraries, executables, tests, and module setup data.
-The system dependencies in the table above remain prerequisites.
+The platform requirements in the table above remain prerequisites; Linux can
+instead use the automatically selected portable backend.
 
 On Windows, the MinGW OpenBLAS and Fortran runtime DLLs must be discoverable by
 the process loading CSDP (normally by keeping `$MINGW_PREFIX/bin` on `PATH`).
