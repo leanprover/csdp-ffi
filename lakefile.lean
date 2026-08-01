@@ -143,15 +143,20 @@ private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
     if let some msg ← missingNativeDepsMessage pkg.dir then
       error msg
 
+private def csdpArtifactLinkArgs : Array String :=
+  let dir := __dir__ / defaultBuildDir / defaultNativeLibDir
+  let search := #["-L", dir.toString]
+  if System.Platform.isWindows then
+    search ++ #["-lcsdp"]
+  else
+    search ++ #[s!"-Wl,-rpath,{dir}", "-lcsdp"]
+
 package CSDP where
   /- These arguments are intentionally private to this package's own link
   steps. In particular, Lake uses them when deriving the interpreter-side
   shared library for `csdpBridge`; downstream targets receive the resolved
   `csdpDynlib` artifact instead of these raw arguments. -/
-  moreLinkArgs := #[
-    "-L", (__dir__ / defaultBuildDir / defaultNativeLibDir).toString,
-    "-lcsdp"
-  ]
+  moreLinkArgs := csdpArtifactLinkArgs
 
 /-! ## CSDP object compilation. -/
 
