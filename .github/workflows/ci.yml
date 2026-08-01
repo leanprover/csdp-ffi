@@ -132,6 +132,7 @@ jobs:
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-gdb
             git
             curl
             unzip
@@ -183,11 +184,14 @@ jobs:
               objdump -p "$binary" | grep 'DLL Name' || true
             done
             echo "Recursive loader check:"
-            cygcheck .lake/build/bin/csdp-example.exe || true
+            lake env cygcheck .lake/build/bin/csdp-example.exe || true
+            gdb --batch -ex run -ex "thread apply all bt" \
+              --args .lake/build/bin/csdp-example.exe || true
             cp .lake/build/lib/*.dll .lake/build/bin/
             cp "$MINGW_PREFIX/bin"/*.dll .lake/build/bin/
-            lean_prefix="$(lean --print-prefix)"
+            lean_prefix="$(cygpath -u "$(lean --print-prefix)")"
             cp "$lean_prefix/lib/lean"/*.dll .lake/build/bin/
+            cygcheck .lake/build/bin/csdp-example.exe || true
             .lake/build/bin/csdp-example.exe
             echo "direct retry after colocating DLLs: $?"
             exit "$rc"
