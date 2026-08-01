@@ -62,6 +62,15 @@ private def blasLapackLinkArgs (pkgDir : FilePath) : IO (Array String) := do
     return linkSearchArgs (configured ++ linuxLibDirs) ++
       #["-llapack", "-lblas", "-l:libgfortran.so.5", "-lm"]
 
+private def windowsOpenblasImportLib (pkgDir : FilePath) : IO FilePath := do
+  let dirs := (← configuredLibDirs) ++ windowsLibDirs pkgDir
+  for dir in dirs do
+    let path := dir / "libopenblas.dll.a"
+    if ← path.pathExists then
+      return path
+  throw <| IO.userError s!"csdp-ffi: could not find libopenblas.dll.a in:
+    {dirs.toList}"
+
 private def dirContainsPrefix (dir : FilePath) (prefixes : Array String) :
     IO Bool := do
   let entries ← try
@@ -236,12 +245,26 @@ target csdpDynlib pkg : Dynlib := do
       compileSharedLib path (wholeArchiveArgs ++ linkArgs) "cc"
     return {path := artifact.path, name := "csdp"}
 
+/-- The Windows OpenBLAS import library as an exported link artifact. CSDP and
+the Lean bridge remain in one native archive on Windows so allocations never
+cross the MinGW/Lean C-runtime boundary; this artifact supplies their external
+BLAS/LAPACK symbols without leaking raw flags to consumers. -/
+target windowsOpenblas pkg : Dynlib := do
+  let path ← windowsOpenblasImportLib pkg.dir
+  let input ← inputFile path false
+  return input.map fun path => ({path, name := "openblas"} : Dynlib)
+
 /-- Lean ↔ C bridge archive used both to construct the shared bridge and to
 provide native executables with bridge code bound directly to their runtime. -/
 target csdpBridgeStatic (pkg) : FilePath := do
   let name := nameToStaticLib "csdp_bridge"
   let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg)
-  buildStaticLib (pkg.staticLibDir / name) bridgeOs
+  if System.Platform.isWindows then
+    let nativeDeps ← checkNativeDepsJob pkg
+    let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps)
+    buildStaticLib (pkg.staticLibDir / name) (csdpOs ++ bridgeOs)
+  else
+    buildStaticLib (pkg.staticLibDir / name) bridgeOs
 
 /-- Lean ↔ C bridge with an explicit dependency on the solver DLL. Module setup
 loads `csdpDynlib` before this bridge on Windows. The shared object deliberately
@@ -249,18 +272,20 @@ leaves its Lean runtime references unresolved so they bind to the host editor,
 interpreter, or executable rather than introducing a second Lean runtime. -/
 target csdpBridgeDynlib pkg : Dynlib := do
   let bridgeJob ← csdpBridgeStatic.fetch
-  let csdpJob ← csdpDynlib.fetch
-  csdpJob.bindM (sync := true) fun csdp => do
-    let dir := csdp.dir?.getD pkg.staticLibDir
-    let search := #["-L", dir.toString]
-    let linkArgs :=
-      if System.Platform.isWindows then
-        search ++ #[s!"-l{csdp.name}"]
-      else
-        search ++ #[s!"-Wl,-rpath,{dir}", s!"-l{csdp.name}"]
+  if System.Platform.isWindows then
+    let linkArgs ← blasLapackLinkArgs pkg.dir
     let sharedJob ← buildLeanSharedLibOfStatic bridgeJob #[] linkArgs
     sharedJob.mapM fun path =>
-      return {path, name := "csdp_bridge", deps := #[csdp]}
+      return {path, name := "csdp_bridge"}
+  else
+    let csdpJob ← csdpDynlib.fetch
+    csdpJob.bindM (sync := true) fun csdp => do
+      let dir := csdp.dir?.getD pkg.staticLibDir
+      let linkArgs :=
+        #["-L", dir.toString, s!"-Wl,-rpath,{dir}", s!"-l{csdp.name}"]
+      let sharedJob ← buildLeanSharedLibOfStatic bridgeJob #[] linkArgs
+      sharedJob.mapM fun path =>
+        return {path, name := "csdp_bridge", deps := #[csdp]}
 
 /-- Check that the platform BLAS/LAPACK runtime expected by `lake build`
 is visible before invoking the native linker. -/
@@ -274,23 +299,29 @@ script checkNativeDeps (_args) do
 
 /-! ## Lean library and executables.
 
-The CSDP Lean library exports the resolved solver and Lean bridge as ordered
-`Dynlib`s. Editor and interpreter processes load the bridge after its solver
-dependency. Native targets additionally link the bridge archive so the bridge's
-Lean references bind directly to the executable runtime. On Windows, modules
-are not individually precompiled: their DLLs would force native executables to
-load the interpreter bridge and its `libInit_shared.dll` dependency. Library
-shared facets remain available for downstream precompiled consumers.
+On macOS and Linux, the CSDP Lean library exports the resolved solver and Lean
+bridge as ordered `Dynlib`s. On Windows, the bridge archive also contains the
+solver: keeping both sides of CSDP-owned allocations in the same binary avoids
+cross-runtime heap corruption. Native targets link that archive and the
+exported OpenBLAS import library; editor and interpreter processes load its
+combined DLL. Windows modules are not individually precompiled so native
+executables do not acquire the interpreter bridge's `libInit_shared.dll`
+dependency. Library shared facets remain available to downstream precompiled
+consumers.
 -/
 
 @[default_target]
 lean_lib CSDP where
   precompileModules := !System.Platform.isWindows
-  dynlibs := #[`@/csdpDynlib, `@/csdpBridgeDynlib]
+  dynlibs :=
+    if System.Platform.isWindows then
+      #[`@/csdpBridgeDynlib]
+    else
+      #[`@/csdpDynlib, `@/csdpBridgeDynlib]
   moreLinkObjs := #[`@/csdpBridgeStatic]
   moreLinkLibs :=
     if System.Platform.isWindows then
-      #[`@/csdpDynlib]
+      #[`@/windowsOpenblas]
     else
       #[`@/csdpDynlib, `@/csdpBridgeDynlib]
 
