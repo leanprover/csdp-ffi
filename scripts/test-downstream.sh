@@ -27,10 +27,11 @@ lake env lean DownstreamTest.lean \
 # native artifact. Lake must recreate CSDP's platform artifact while leaving
 # the already valid consumer module untouched.
 dynlib="$(find "$repo_root/.lake/build/lib" -maxdepth 1 -type f \
-  \( -name 'libcsdp.so' -o -name 'libcsdp.dylib' -o -name 'csdp.dll' \) \
+  \( -name 'libcsdp.so' -o -name 'libcsdp.dylib' \
+     -o -name 'csdp_bridge.dll' \) \
   -print -quit)"
 if [[ -z "$dynlib" ]]; then
-  echo "could not find the resolved CSDP dynamic library"
+  echo "could not find the CSDP provider's native artifact"
   exit 1
 fi
 rm -f "$dynlib"
