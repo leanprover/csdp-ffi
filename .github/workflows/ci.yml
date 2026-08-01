@@ -46,10 +46,16 @@ jobs:
       - name: Run example
         run: |
           set +e
-          ./.lake/build/bin/csdp-example > /tmp/csdp.out 2>&1
+          lake exe csdp-example > /tmp/csdp.out 2>&1
           rc=$?
           tail -20 /tmp/csdp.out
           exit $rc
+
+      - name: Test downstream package without native link flags
+        run: ./scripts/test-downstream.sh
+
+      - name: Test downstream editor loading
+        run: python3 ./scripts/test-lsp.py
 
   macos:
     name: macOS
@@ -98,10 +104,13 @@ jobs:
       - name: Run example
         run: |
           set +e
-          ./.lake/build/bin/csdp-example > /tmp/csdp.out 2>&1
+          lake exe csdp-example > /tmp/csdp.out 2>&1
           rc=$?
           tail -20 /tmp/csdp.out
           exit $rc
+
+      - name: Test downstream package without native link flags
+        run: ./scripts/test-downstream.sh
 
   windows:
     name: Windows (MSYS2 / mingw-w64)
@@ -155,7 +164,11 @@ jobs:
           ./scripts/install-toolchain.sh
           lake build CSDP csdp-example
           set +e
-          ./.lake/build/bin/csdp-example.exe > /tmp/csdp.out 2>&1
+          lake exe csdp-example > /tmp/csdp.out 2>&1
           rc=$?
           tail -20 /tmp/csdp.out
-          exit $rc
+          if [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+          set -e
+          ./scripts/test-downstream.sh
