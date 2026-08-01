@@ -266,8 +266,14 @@ provide native executables with bridge code bound directly to their runtime. -/
 target csdpBridgeStatic (pkg) : FilePath := do
   -- Give the Windows archive a link-only basename distinct from the
   -- interpreter DLL. This makes `-lcsdp_bridge_link` unambiguously static.
-  let name := nameToStaticLib <|
-    if System.Platform.isWindows then "csdp_bridge_link" else "csdp_bridge"
+  let name :=
+    if System.Platform.isWindows then
+      -- MinGW's `-lfoo` searches for `libfoo.a`; Lake's ordinary Windows
+      -- static-library name has no `lib` prefix because it is usually passed
+      -- as an object path instead of through `-l`.
+      "libcsdp_bridge_link.a"
+    else
+      nameToStaticLib "csdp_bridge"
   let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg)
   if System.Platform.isWindows then
     let nativeDeps ← checkNativeDepsJob pkg
