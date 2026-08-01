@@ -90,6 +90,10 @@ provider-owned CSDP build; consumers still do not add link flags.
 Set `CSDP_FORCE_PORTABLE_LINALG=1` to exercise the bundled Linux fallback even
 when system libraries are available.
 
+The package directs compiler and linker temporary files to its own
+`.lake/build/tmp` directory. This keeps native builds working in downstream
+sandboxes where the system temporary directory is read-only.
+
 ## Using `csdp-ffi` as a Lake dependency
 
 Add the package normally and import `CSDP`:
@@ -135,6 +139,7 @@ CSDP/Basic.lean        # Lean-side types + opaque FFI declarations
 Main.lean              # Worked example exercised in CI
 lakefile.lean          # Build configuration
 scripts/install-toolchain.sh  # Lean toolchain installer with GitHub-release fallback
+scripts/cc-link-temp-probe.sh # CI check for package-local linker temporaries
 scripts/test-downstream.sh     # Flag-free downstream and cache-boundary checks
 scripts/test-lsp.py            # `lake serve` native-loading smoke test
 tests/downstream/              # Platform-independent consumer fixture
