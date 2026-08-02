@@ -46,10 +46,18 @@ private def forcePortableLinalg : IO Bool := do
   let value ← IO.getEnv "CSDP_FORCE_PORTABLE_LINALG"
   return value.any fun value => value == "1" || value.toLower == "true"
 
+/-- A stable, dependency-level switch for release builds. Unlike an environment
+variable, a Lake configuration value is recorded in the dependency manifest and
+therefore selects the same native backend whenever the package is rebuilt. -/
+private def configuredPortableLinalg : Bool :=
+  (get_config? csdpPortable).bind envToBool? |>.getD false
+
 private def blasLapackLinkArgs (pkgDir : FilePath) (portable : Bool := false) :
     IO (Array String) := do
   let configured ← configuredLibDirs
-  if System.Platform.isOSX then
+  if portable then
+    if System.Platform.isWindows then return #[] else return #["-lm"]
+  else if System.Platform.isOSX then
     -- Pass the SDK path as a linker flag so it overrides Lake's earlier
     -- `--sysroot` pointing at the Lean toolchain.
     return #[s!"-Wl,-syslibroot,{macSdkPath}", "-framework", "Accelerate"]
@@ -61,8 +69,6 @@ private def blasLapackLinkArgs (pkgDir : FilePath) (portable : Bool := false) :
     return linkSearchArgs (configured ++ windowsLibDirs pkgDir) ++
       #["-lopenblas", "-lgfortran", "-lquadmath", "-lm"]
   else
-    if portable then
-      return #["-lm"]
     -- We use `-l:libgfortran.so.5` (the SONAME of the runtime library) so
     -- linking does not depend on the gfortran-dev package leaving an
     -- unversioned `libgfortran.so` symlink behind.
@@ -161,15 +167,14 @@ private def missingNativeDepsMessage (pkgDir : FilePath) : IO (Option String) :=
       CSDP_NATIVE_LIB_DIRS to a platform search-path list of library \
       directories."
 
-/-- Linux can use a bundled, portable implementation of the small BLAS/LAPACK
-surface CSDP calls when the system libraries are unavailable. This keeps the
-package buildable in restricted downstream sandboxes while retaining tuned
-system libraries whenever they are present. -/
+/-- Use the bundled implementation of the small BLAS/LAPACK surface CSDP calls
+when explicitly configured, forced for testing, or unavailable on Linux. The
+explicit configuration is used for dependency release archives on every OS. -/
 private def usePortableLinalg (pkgDir : FilePath) : IO Bool := do
+  if configuredPortableLinalg || (← forcePortableLinalg) then
+    return true
   if System.Platform.isOSX || System.Platform.isWindows then
     return false
-  if ← forcePortableLinalg then
-    return true
   return (← missingNativeDepsMessage pkgDir).isSome
 
 private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
@@ -180,7 +185,8 @@ private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
     else if let some msg ← missingNativeDepsMessage pkg.dir then
       error msg
 
-package CSDP
+package CSDP where
+  preferReleaseBuild := true
 
 /-- Link a shared library with compiler temporaries inside the package build
 directory. Downstream sandboxes may make the system temporary directory
@@ -196,7 +202,7 @@ private def linkShared (pkg : Package) (libFile : FilePath)
     ("TEMP", some tempDir.toString)
   ]
   if System.Platform.isOSX && (← IO.getEnv "MACOSX_DEPLOYMENT_TARGET").isNone then
-    env := env.push ("MACOSX_DEPLOYMENT_TARGET", some "99.0")
+    env := env.push ("MACOSX_DEPLOYMENT_TARGET", some "13.0")
   proc {
     cmd := linker.toString
     args := #["-shared", "-o", libFile.toString] ++ (← mkArgs libFile linkArgs)
@@ -217,8 +223,7 @@ def csdpSrcs : Array String := #[
   "writeprob.c", "writesol.c", "zero_mat.c"
 ]
 
-def csdpCFlags (pkg : Package) (portable : Bool) : Array String :=
-  let inc := pkg.dir / "vendored" / "csdp" / "include"
+def csdpCFlags (portable : Bool) : Array String :=
   -- CSDP's source uses K&R-style definitions and unprototyped declarations
   -- (`int foo()` meaning "any args"). Modern C compilers default to C23,
   -- where `()` means `(void)` and the K&R bodies are reported as
@@ -227,15 +232,13 @@ def csdpCFlags (pkg : Package) (portable : Bool) : Array String :=
   let base := #[ "-O2", "-pipe", "-DBIT64", "-DNOSHORTS", "-fPIC", "-std=gnu89",
      "-Wno-implicit-function-declaration",
      "-Wno-deprecated-non-prototype",
-     "-Wno-old-style-definition",
-     "-I", inc.toString ]
+     "-Wno-old-style-definition" ]
   if portable then base.push "-DCSDP_PORTABLE_LINALG" else base
 
 private def portableLinalgOTarget (pkg : Package) : FetchM (Job FilePath) := do
   let oFile := pkg.dir / defaultBuildDir / "ffi" / "portable_linalg.o"
   let srcTarget ← inputTextFile <| pkg.dir / "ffi" / "portable_linalg.c"
-  buildFileAfterDep oFile srcTarget fun srcFile => do
-    compileO oFile srcFile #["-O2", "-pipe", "-fPIC", "-std=c99"]
+  buildO oFile srcTarget (traceArgs := #["-O2", "-pipe", "-fPIC", "-std=c99"])
 
 private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit)
     (portable : Bool) (src : String) :
@@ -243,8 +246,10 @@ private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit)
   let stem := src.dropEnd 2
   let oFile := pkg.dir / defaultBuildDir / "csdp" / s!"{stem}.o"
   let srcTarget ← inputTextFile <| pkg.dir / "vendored" / "csdp" / "lib" / src
-  buildFileAfterDep oFile (srcTarget.add nativeDeps) fun srcFile => do
-    compileO oFile srcFile (csdpCFlags pkg portable)
+  let inc := pkg.dir / "vendored" / "csdp" / "include"
+  buildO oFile (srcTarget.add nativeDeps)
+    (weakArgs := #["-I", inc.toString])
+    (traceArgs := csdpCFlags portable)
 
 /-! ## Lean ↔ CSDP bridge. -/
 
@@ -255,16 +260,16 @@ private def bridgeOTarget (pkg : Package) (src : String) :
   let stem := src.dropEnd 2
   let oFile := pkg.dir / defaultBuildDir / "ffi" / s!"{stem}.o"
   let srcTarget ← inputTextFile <| pkg.dir / "ffi" / src
-  buildFileAfterDep oFile srcTarget fun srcFile => do
-    let leanInc := (← getLeanIncludeDir).toString
-    let csdpInc := (pkg.dir / "vendored" / "csdp" / "include").toString
-    let ffiInc  := (pkg.dir / "ffi").toString
-    compileO oFile srcFile #[
-      "-O2", "-pipe", "-DBIT64", "-fPIC",
+  let leanInc := (← getLeanIncludeDir).toString
+  let csdpInc := (pkg.dir / "vendored" / "csdp" / "include").toString
+  let ffiInc  := (pkg.dir / "ffi").toString
+  buildO oFile srcTarget
+    (weakArgs := #[
       "-I", leanInc,
       "-I", csdpInc,
       "-I", ffiInc
-    ]
+    ])
+    (traceArgs := #["-O2", "-pipe", "-DBIT64", "-fPIC"])
 
 /-- Private archive containing the CSDP solver.
 
@@ -330,7 +335,10 @@ target csdpBridgeStatic (pkg) : FilePath := do
   let bridgeOs ← bridgeSrcs.mapM (bridgeOTarget pkg)
   if System.Platform.isWindows then
     let nativeDeps ← checkNativeDepsJob pkg
-    let csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps false)
+    let portable ← usePortableLinalg pkg.dir
+    let mut csdpOs ← csdpSrcs.mapM (csdpOTarget pkg nativeDeps portable)
+    if portable then
+      csdpOs := csdpOs.push (← portableLinalgOTarget pkg)
     buildStaticLib (pkg.staticLibDir / name) (csdpOs ++ bridgeOs)
   else
     buildStaticLib (pkg.staticLibDir / name) bridgeOs
@@ -342,10 +350,9 @@ interpreter, or executable rather than introducing a second Lean runtime. -/
 target csdpBridgeDynlib pkg : Dynlib := do
   let bridgeJob ← csdpBridgeStatic.fetch
   if System.Platform.isWindows then
-    let openblasJob ← windowsOpenblas.fetch
-    let linkArgs ← blasLapackLinkArgs pkg.dir
-    bridgeJob.bindM (sync := true) fun bridge => do
-    openblasJob.mapM fun openblas => do
+    let portable ← usePortableLinalg pkg.dir
+    let linkArgs ← blasLapackLinkArgs pkg.dir portable
+    let buildBridge (deps : Array Dynlib) (bridge : FilePath) : JobM Dynlib := do
       addPureTrace linkArgs "native link arguments"
       addPlatformTrace
       let path := pkg.staticLibDir / nameToSharedLib "csdp_bridge"
@@ -358,19 +365,33 @@ target csdpBridgeDynlib pkg : Dynlib := do
           linkArgs ++ #["-L", lean.leanLibDir.toString] ++
           lean.ccLinkSharedFlags
         linkShared pkg path args lean.cc
-      return {path := artifact.path, name := "csdp_bridge", deps := #[openblas]}
+      return {path := artifact.path, name := "csdp_bridge", deps}
+    if portable then
+      bridgeJob.mapM (buildBridge #[])
+    else
+      let openblasJob ← windowsOpenblas.fetch
+      bridgeJob.bindM (sync := true) fun bridge => do
+        openblasJob.mapM fun openblas => buildBridge #[openblas] bridge
   else
     let csdpJob ← csdpDynlib.fetch
     csdpJob.bindM (sync := true) fun csdp => do
       let dir := csdp.dir?.getD pkg.staticLibDir
+      let rpath :=
+        if System.Platform.isOSX then "-Wl,-rpath,@loader_path"
+        else "-Wl,-rpath,$ORIGIN"
       let linkArgs :=
-        #["-L", dir.toString, s!"-Wl,-rpath,{dir}", s!"-l{csdp.name}"]
+        #["-L", dir.toString, rpath, s!"-l{csdp.name}"]
       let sharedJob ← bridgeJob.mapM fun bridge => do
         addLeanTrace
-        addPureTrace linkArgs
+        -- The search directory is the package's absolute build path and is
+        -- deliberately excluded: the release archive must remain valid after
+        -- extraction below a downstream package. The relative rpath and
+        -- library name are the semantic linker inputs.
+        addPureTrace #[rpath, s!"-l{csdp.name}"] "native link arguments"
         addPlatformTrace
         let path := bridge.withExtension sharedLibExt
-        buildFileUnlessUpToDate' path do
+        let artifact ← buildArtifactUnlessUpToDate path (ext := sharedLibExt)
+            (restore := true) do
           let lean ← getLeanInstall
           let wholeArchiveArgs :=
             if System.Platform.isOSX then
@@ -381,7 +402,7 @@ target csdpBridgeDynlib pkg : Dynlib := do
           let args := wholeArchiveArgs ++ linkArgs ++
             #["-L", lean.leanLibDir.toString] ++ lean.ccLinkSharedFlags
           linkShared pkg path args lean.cc
-        return path
+        return artifact.path
       sharedJob.mapM fun path =>
         return {path, name := "csdp_bridge", deps := #[csdp]}
 
