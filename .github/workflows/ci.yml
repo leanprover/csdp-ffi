@@ -80,7 +80,6 @@ jobs:
           lake -KcsdpPortable=true -KcsdpSanitize=true exe csdp-example
 
       - name: Pack and test release archive
-        if: startsWith(github.ref, 'refs/tags/v')
         run: ./scripts/build-release-archive.sh release-assets
 
       - name: Upload release archive

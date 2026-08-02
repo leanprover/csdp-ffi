@@ -11,19 +11,20 @@ repo_root="${CSDP_RELEASE_SOURCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 
 archive_dir="$(cd "$(dirname "$1")" && pwd)"
 archive="$archive_dir/$(basename "$1")"
 trial="$(mktemp -d)"
+archive_listing="$(tar -tzf "$archive")"
 
 for required in \
     './BUILD-PROVENANCE.txt' \
     './share/licenses/csdp-ffi/Apache-2.0.txt' \
     './share/licenses/csdp-ffi/CSDP-CPL-1.0.txt' \
     './share/licenses/csdp-ffi/THIRD_PARTY_NOTICES.md'; do
-  if ! tar -tzf "$archive" | grep -Fxq "$required"; then
+  if ! grep -Fxq "$required" <<<"$archive_listing"; then
     echo "release archive is missing $required" >&2
     exit 1
   fi
 done
 
-if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+if grep -Eq '(^/|(^|/)\.\.(/|$))' <<<"$archive_listing"; then
   echo "release archive contains an absolute or parent-traversing path" >&2
   exit 1
 fi
