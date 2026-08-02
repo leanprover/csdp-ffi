@@ -7,7 +7,7 @@ if [[ "$#" -ne 1 ]]; then
   exit 2
 fi
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="${CSDP_RELEASE_SOURCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 archive_dir="$(cd "$(dirname "$1")" && pwd)"
 archive="$archive_dir/$(basename "$1")"
 trial="$(mktemp -d)"
