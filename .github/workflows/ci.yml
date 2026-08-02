@@ -75,14 +75,14 @@ jobs:
 
       - name: Pack and test release archive
         if: startsWith(github.ref, 'refs/tags/v')
-        run: ./scripts/build-release-archive.sh .lake
+        run: ./scripts/build-release-archive.sh release-assets
 
       - name: Upload release archive
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: CSDP-linux-x64
-          path: .lake/CSDP-*.tar.gz
+          path: release-assets/CSDP-*.tar.gz
 
   macos:
     name: macOS (ARM64)
@@ -143,14 +143,14 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           MACOSX_DEPLOYMENT_TARGET: '13.0'
-        run: ./scripts/build-release-archive.sh .lake
+        run: ./scripts/build-release-archive.sh release-assets
 
       - name: Upload release archive
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: CSDP-macos-arm64
-          path: .lake/CSDP-*.tar.gz
+          path: release-assets/CSDP-*.tar.gz
 
   windows:
     name: Windows (MSYS2 / mingw-w64)
@@ -213,7 +213,7 @@ jobs:
           set -e
           ./scripts/test-downstream.sh
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            ./scripts/build-release-archive.sh .lake
+            ./scripts/build-release-archive.sh release-assets
           fi
 
       - name: Upload release archive
@@ -221,7 +221,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CSDP-windows-x64
-          path: .lake/CSDP-*.tar.gz
+          path: release-assets/CSDP-*.tar.gz
 
   release-additional-platforms:
     name: Release (${{ matrix.name }})
@@ -268,13 +268,13 @@ jobs:
         shell: bash
         env:
           MACOSX_DEPLOYMENT_TARGET: '13.0'
-        run: ./scripts/build-release-archive.sh .lake
+        run: ./scripts/build-release-archive.sh release-assets
 
       - name: Upload release archive
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: .lake/CSDP-*.tar.gz
+          path: release-assets/CSDP-*.tar.gz
 
   release:
     name: Publish release
