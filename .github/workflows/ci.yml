@@ -77,7 +77,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           lake clean
-          lake build CSDP csdp-example -- -KcsdpPortable=true
+          lake -KcsdpPortable=true build CSDP csdp-example
           lake pack
           ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
 
@@ -149,7 +149,7 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
           lake clean
-          lake build CSDP csdp-example -- -KcsdpPortable=true
+          lake -KcsdpPortable=true build CSDP csdp-example
           lake pack
           ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
 
@@ -222,7 +222,7 @@ jobs:
           ./scripts/test-downstream.sh
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             lake clean
-            lake build CSDP csdp-example -- -KcsdpPortable=true
+            lake -KcsdpPortable=true build CSDP csdp-example
             lake pack
             ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
           fi
@@ -280,7 +280,7 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
-          lake build CSDP csdp-example -- -KcsdpPortable=true
+          lake -KcsdpPortable=true build CSDP csdp-example
           lake pack
           ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
 
