@@ -124,6 +124,21 @@ The archives use the portable backend, so the system-library prerequisites in
 the table above apply only when building the package from source without
 `csdpPortable`.
 
+Each release includes a flat `SHA256SUMS` manifest and GitHub-signed SLSA
+provenance for all five archives. For example, after setting `tag` to the
+release being audited:
+
+```bash
+gh release download "$tag" --repo leanprover/csdp-ffi --dir release-assets
+(cd release-assets && sha256sum -c SHA256SUMS)
+for archive in release-assets/CSDP-*.tar.gz; do
+  gh attestation verify "$archive" \
+    --repo leanprover/csdp-ffi \
+    --signer-workflow leanprover/csdp-ffi/.github/workflows/ci.yml \
+    --source-ref "refs/tags/$tag"
+done
+```
+
 On Windows, the MinGW OpenBLAS and Fortran runtime DLLs must be discoverable by
 the process loading CSDP (normally by keeping `$MINGW_PREFIX/bin` on `PATH`).
 The csdp-ffi shared library itself is located through Lake's generated setup
