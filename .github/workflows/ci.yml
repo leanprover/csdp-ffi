@@ -75,11 +75,7 @@ jobs:
 
       - name: Pack and test release archive
         if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          lake clean
-          lake -KcsdpPortable=true build CSDP csdp-example
-          lake pack
-          ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
+        run: ./scripts/build-release-archive.sh .lake
 
       - name: Upload release archive
         if: startsWith(github.ref, 'refs/tags/v')
@@ -147,11 +143,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           MACOSX_DEPLOYMENT_TARGET: '13.0'
-        run: |
-          lake clean
-          lake -KcsdpPortable=true build CSDP csdp-example
-          lake pack
-          ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
+        run: ./scripts/build-release-archive.sh .lake
 
       - name: Upload release archive
         if: startsWith(github.ref, 'refs/tags/v')
@@ -221,10 +213,7 @@ jobs:
           set -e
           ./scripts/test-downstream.sh
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            lake clean
-            lake -KcsdpPortable=true build CSDP csdp-example
-            lake pack
-            ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
+            ./scripts/build-release-archive.sh .lake
           fi
 
       - name: Upload release archive
@@ -279,10 +268,7 @@ jobs:
         shell: bash
         env:
           MACOSX_DEPLOYMENT_TARGET: '13.0'
-        run: |
-          lake -KcsdpPortable=true build CSDP csdp-example
-          lake pack
-          ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
+        run: ./scripts/build-release-archive.sh .lake
 
       - name: Upload release archive
         uses: actions/upload-artifact@v4
