@@ -16,7 +16,7 @@ jobs:
     name: Linux (Ubuntu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
 
@@ -33,10 +33,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          if ! command -v elan >/dev/null 2>&1; then
-            curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
-            sh elan-init.sh -y --default-toolchain none
-          fi
+          ./scripts/install-elan.sh
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.elan/bin:$PATH"
           ./scripts/install-toolchain.sh
@@ -73,13 +70,22 @@ jobs:
             lake build CSDP csdp-example
           CSDP_FORCE_PORTABLE_LINALG=1 TMPDIR=/proc lake exe csdp-example
 
+      - name: Test native bridge with ASan and UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=0:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          lake clean
+          lake -KcsdpPortable=true -KcsdpSanitize=true build csdp-example
+          lake -KcsdpPortable=true -KcsdpSanitize=true exe csdp-example
+
       - name: Pack and test release archive
         if: startsWith(github.ref, 'refs/tags/v')
         run: ./scripts/build-release-archive.sh release-assets
 
       - name: Upload release archive
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: CSDP-linux-x64
           path: release-assets/CSDP-*.tar.gz
@@ -88,7 +94,7 @@ jobs:
     name: macOS (ARM64)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
 
@@ -117,10 +123,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          if ! command -v elan >/dev/null 2>&1; then
-            curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
-            sh elan-init.sh -y --default-toolchain none
-          fi
+          ./scripts/install-elan.sh
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.elan/bin:$PATH"
           ./scripts/install-toolchain.sh
@@ -147,7 +150,7 @@ jobs:
 
       - name: Upload release archive
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: CSDP-macos-arm64
           path: release-assets/CSDP-*.tar.gz
@@ -159,12 +162,12 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
 
       - name: Set up MSYS2
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:
           msystem: MINGW64
           update: true
@@ -194,9 +197,7 @@ jobs:
           done
           ls vendor/mingw-libs/
 
-          curl -sSf -L https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -o elan-init.zip
-          unzip -q elan-init.zip
-          MSYS2_ARG_CONV_EXCL="*" ./elan-init.exe -y --default-toolchain none --no-modify-path
+          ./scripts/install-elan.sh
           ELAN_DIR_MSYS="$(cygpath -u "$USERPROFILE")/.elan"
           ls -la "$ELAN_DIR_MSYS/bin" || (echo "elan install did not produce expected files" && exit 1)
           export ELAN_HOME="$ELAN_DIR_MSYS"
@@ -218,7 +219,7 @@ jobs:
 
       - name: Upload release archive
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: CSDP-windows-x64
           path: release-assets/CSDP-*.tar.gz
@@ -238,7 +239,7 @@ jobs:
             artifact: CSDP-macos-x64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
 
@@ -256,10 +257,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          if ! command -v elan >/dev/null 2>&1; then
-            curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
-            sh elan-init.sh -y --default-toolchain none
-          fi
+          ./scripts/install-elan.sh
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.elan/bin:$PATH"
           ./scripts/install-toolchain.sh
@@ -271,7 +269,7 @@ jobs:
         run: ./scripts/build-release-archive.sh release-assets
 
       - name: Upload release archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact }}
           path: release-assets/CSDP-*.tar.gz
@@ -285,7 +283,7 @@ jobs:
       contents: write
     steps:
       - name: Download platform archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: CSDP-*
           path: release-assets
@@ -295,9 +293,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/CSDP-*.tar.gz \
+          sha256sum release-assets/CSDP-*.tar.gz > release-assets/SHA256SUMS
+          release_flags=(--generate-notes)
+          if [[ "$GITHUB_REF_NAME" == *-rc* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            release-assets/CSDP-*.tar.gz release-assets/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
-            --prerelease \
-            --generate-notes
+            --notes "The platform archives contain the Apache-2.0 and CSDP CPL-1.0 licence texts, exact source provenance, and a portable linear-algebra backend. Corresponding source is the vendored/csdp directory at this release tag." \
+            "${release_flags[@]}"

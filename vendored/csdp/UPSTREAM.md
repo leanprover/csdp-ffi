@@ -8,7 +8,7 @@ dependencies).
 
 - **Source**: https://github.com/coin-or/Csdp
 - **Commit**: `e1586e0413ef236b19abe5202f7e8392f3dd4614` (release 6.2.0).
-- **License**: Eclipse Public License 1.0 (see `LICENSE` in this
+- **License**: Common Public License 1.0 (see `LICENSE` in this
   directory).
 
 To bump the upstream version:

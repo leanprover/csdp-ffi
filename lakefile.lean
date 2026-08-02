@@ -52,6 +52,17 @@ therefore selects the same native backend whenever the package is rebuilt. -/
 private def configuredPortableLinalg : Bool :=
   (get_config? csdpPortable).bind envToBool? |>.getD false
 
+/-- Opt-in native instrumentation for the provider's Linux safety job. This is
+kept as a Lake configuration value so it participates in build traces. -/
+private def configuredSanitizers : Bool :=
+  (get_config? csdpSanitize).bind envToBool? |>.getD false
+
+private def sanitizerArgs : Array String :=
+  if configuredSanitizers then
+    #["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+  else
+    #[]
+
 private def blasLapackLinkArgs (pkgDir : FilePath) (portable : Bool := false) :
     IO (Array String) := do
   let configured ← configuredLibDirs
@@ -180,6 +191,8 @@ private def usePortableLinalg (pkgDir : FilePath) : IO Bool := do
 private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
   Job.async (caption := "csdp-ffi native dependency check") do
     addPlatformTrace
+    if configuredSanitizers && (System.Platform.isOSX || System.Platform.isWindows) then
+      error "csdp-ffi: csdpSanitize is supported only on Linux"
     if ← usePortableLinalg pkg.dir then
       pure ()
     else if let some msg ← missingNativeDepsMessage pkg.dir then
@@ -187,6 +200,7 @@ private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
 
 package CSDP where
   preferReleaseBuild := true
+  moreLinkArgs := sanitizerArgs
 
 /-- Link a shared library with compiler temporaries inside the package build
 directory. Downstream sandboxes may make the system temporary directory
@@ -205,7 +219,8 @@ private def linkShared (pkg : Package) (libFile : FilePath)
     env := env.push ("MACOSX_DEPLOYMENT_TARGET", some "13.0")
   proc {
     cmd := linker.toString
-    args := #["-shared", "-o", libFile.toString] ++ (← mkArgs libFile linkArgs)
+    args := #["-shared", "-o", libFile.toString] ++
+      (← mkArgs libFile (linkArgs ++ sanitizerArgs))
     env
   }
 
@@ -233,12 +248,14 @@ def csdpCFlags (portable : Bool) : Array String :=
      "-Wno-implicit-function-declaration",
      "-Wno-deprecated-non-prototype",
      "-Wno-old-style-definition" ]
+  let base := base ++ sanitizerArgs
   if portable then base.push "-DCSDP_PORTABLE_LINALG" else base
 
 private def portableLinalgOTarget (pkg : Package) : FetchM (Job FilePath) := do
   let oFile := pkg.dir / defaultBuildDir / "ffi" / "portable_linalg.o"
   let srcTarget ← inputTextFile <| pkg.dir / "ffi" / "portable_linalg.c"
-  buildO oFile srcTarget (traceArgs := #["-O2", "-pipe", "-fPIC", "-std=c99"])
+  buildO oFile srcTarget
+    (traceArgs := #["-O2", "-pipe", "-fPIC", "-std=c99"] ++ sanitizerArgs)
 
 private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit)
     (portable : Bool) (src : String) :
@@ -269,7 +286,7 @@ private def bridgeOTarget (pkg : Package) (src : String) :
       "-I", csdpInc,
       "-I", ffiInc
     ])
-    (traceArgs := #["-O2", "-pipe", "-DBIT64", "-fPIC"])
+    (traceArgs := #["-O2", "-pipe", "-DBIT64", "-fPIC"] ++ sanitizerArgs)
 
 /-- Private archive containing the CSDP solver.
 

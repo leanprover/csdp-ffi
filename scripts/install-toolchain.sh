@@ -47,7 +47,10 @@ esac
 uname_out="$(uname -s)"
 case "$uname_out" in
   Linux)
-    ARCH="linux"
+    case "$(uname -m)" in
+      arm64|aarch64) ARCH="linux_aarch64" ;;
+      *)             ARCH="linux" ;;
+    esac
     ;;
   Darwin)
     case "$(uname -m)" in
@@ -84,6 +87,39 @@ else
   URL="https://github.com/leanprover/lean4/releases/download/${VERSION}/${ASSET}"
   echo "Downloading $URL"
   curl -fSL --retry 5 --retry-delay 10 -o "$TMP/$ASSET" "$URL"
+
+  # Keep the emergency direct-download path as auditable as the ordinary elan
+  # path. A toolchain bump must update these digests from the Lean release.
+  case "$VERSION:$ARCH" in
+    v4.33.0-rc1:linux)
+      EXPECTED_SHA256="25e7b3e18ec75a4e2529fc23194be8e3cc3183df99b553f870d8a111c7488210"
+      ;;
+    v4.33.0-rc1:linux_aarch64)
+      EXPECTED_SHA256="3109cd49829adb096dc85557c313451fb868be15c4259697192073d99c4b69b0"
+      ;;
+    v4.33.0-rc1:darwin)
+      EXPECTED_SHA256="d9565992dca80eae8d28a674558cad4615911beaca35fdd54fdf3db6f77e4a10"
+      ;;
+    v4.33.0-rc1:darwin_aarch64)
+      EXPECTED_SHA256="1eeb88e106f0ff311e84552edd5dbb7415e08518a18197e932492ce4f90bdba5"
+      ;;
+    v4.33.0-rc1:windows)
+      EXPECTED_SHA256="153a94f18d25621b37145a0f59da01970c2248124cd7bc69c84ab90427b5a0f8"
+      ;;
+    *)
+      echo "No audited SHA-256 digest for Lean $VERSION on $ARCH" >&2
+      exit 1
+      ;;
+  esac
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s  %s\n' "$EXPECTED_SHA256" "$TMP/$ASSET" | sha256sum -c -
+  else
+    ACTUAL_SHA256="$(shasum -a 256 "$TMP/$ASSET" | awk '{print $1}')"
+    if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
+      echo "Lean toolchain checksum mismatch: expected $EXPECTED_SHA256, got $ACTUAL_SHA256" >&2
+      exit 1
+    fi
+  fi
 
   case "$EXT" in
     tar.zst)
