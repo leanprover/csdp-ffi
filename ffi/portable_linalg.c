@@ -30,9 +30,14 @@ static ptrdiff_t vector_start(int n, int increment)
  * the required semantics.  Bind that compatibility symbol explicitly so an
  * object compiled by the host C compiler can still link with Lean's sysroot.
  */
-#if defined(__GLIBC__) && defined(__x86_64__)
+#if defined(__GLIBC__) && \
+    (defined(__x86_64__) || defined(__aarch64__))
 extern double csdp_glibc_pow(double base, double exponent);
+#if defined(__x86_64__)
 __asm__(".symver csdp_glibc_pow,pow@GLIBC_2.2.5");
+#else
+__asm__(".symver csdp_glibc_pow,pow@GLIBC_2.17");
+#endif
 
 double csdp_ffi_pow(double base, double exponent)
 {
