@@ -199,7 +199,12 @@ private def checkNativeDepsJob (pkg : Package) : FetchM (Job Unit) :=
       error msg
 
 package CSDP where
-  preferReleaseBuild := true
+  -- Consumers which promise a complete prebuilt tree fetch `@CSDP:release`
+  -- explicitly. Keeping Lake's implicit release preference disabled lets
+  -- sandboxed or offline builds fall back directly to the bundled portable
+  -- source instead of recording an unavailable optional download as a failed
+  -- build target.
+  preferReleaseBuild := false
   moreLinkArgs := sanitizerArgs
 
 /-- Link a shared library with compiler temporaries inside the package build

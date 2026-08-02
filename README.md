@@ -118,8 +118,10 @@ OpenBLAS DLL, avoiding unsafe allocation across different C
 runtimes. Lake propagates these provider-owned artifacts through ordinary
 imports to downstream libraries, executables, tests, and module setup data.
 Tagged releases provide relocatable archives for Linux x64/ARM64, macOS
-x64/ARM64, and Windows x64. Lake fetches the archive matching the current
-target instead of compiling CSDP when the build directory is initially absent.
+x64/ARM64, and Windows x64. A downstream cache or release orchestrator can
+fetch the archive matching the current target with `lake build @CSDP:release`.
+Ordinary builds use the bundled portable source directly, so an offline or
+sandboxed build does not turn a failed optional download into a failed target.
 The archives use the portable backend, so the system-library prerequisites in
 the table above apply only when building the package from source without
 `csdpPortable`.
