@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -72,9 +73,24 @@ jobs:
             lake build CSDP csdp-example
           CSDP_FORCE_PORTABLE_LINALG=1 TMPDIR=/proc lake exe csdp-example
 
+      - name: Pack and test release archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          lake clean
+          lake build CSDP csdp-example -- -KcsdpPortable=true
+          lake pack
+          ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
+
+      - name: Upload release archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: CSDP-linux-x64
+          path: .lake/CSDP-*.tar.gz
+
   macos:
-    name: macOS
-    runs-on: macos-latest
+    name: macOS (ARM64)
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,6 +142,23 @@ jobs:
 
       - name: Test downstream package without native link flags
         run: ./scripts/test-downstream.sh
+
+      - name: Pack and test release archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
+        run: |
+          lake clean
+          lake build CSDP csdp-example -- -KcsdpPortable=true
+          lake pack
+          ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
+
+      - name: Upload release archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: CSDP-macos-arm64
+          path: .lake/CSDP-*.tar.gz
 
   windows:
     name: Windows (MSYS2 / mingw-w64)
@@ -187,3 +220,98 @@ jobs:
           fi
           set -e
           ./scripts/test-downstream.sh
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            lake clean
+            lake build CSDP csdp-example -- -KcsdpPortable=true
+            lake pack
+            ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
+          fi
+
+      - name: Upload release archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: CSDP-windows-x64
+          path: .lake/CSDP-*.tar.gz
+
+  release-additional-platforms:
+    name: Release (${{ matrix.name }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            artifact: CSDP-linux-arm64
+          - name: macOS x64
+            runner: macos-15-intel
+            artifact: CSDP-macos-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install zstd
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          else
+            brew install zstd
+          fi
+
+      - name: Install elan and Lean toolchain
+        shell: bash
+        run: |
+          set -e
+          if ! command -v elan >/dev/null 2>&1; then
+            curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+            sh elan-init.sh -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.elan/bin:$PATH"
+          ./scripts/install-toolchain.sh
+
+      - name: Pack and test release archive
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
+        run: |
+          lake build CSDP csdp-example -- -KcsdpPortable=true
+          lake pack
+          ./scripts/test-release-archive.sh .lake/CSDP-*.tar.gz
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: .lake/CSDP-*.tar.gz
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, windows, release-additional-platforms]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: CSDP-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/CSDP-*.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --prerelease \
+            --generate-notes
