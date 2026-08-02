@@ -154,5 +154,10 @@ tests/downstream/              # Platform-independent consumer fixture
 
 ## Licence
 
-Apache License 2.0 (see [LICENSE](LICENSE)). CSDP itself is distributed
-under the [Eclipse Public License 1.0](vendored/csdp/LICENSE).
+The Lean bindings and packaging code are distributed under the Apache License
+2.0 (see [LICENSE](LICENSE)). The vendored CSDP 6.2.0 sources and the CSDP
+objects included in native release archives are distributed under the
+[Common Public License 1.0](vendored/csdp/LICENSE). Exact upstream provenance
+and binary-distribution notices are recorded in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); release archives carry all
+three files under `share/licenses/csdp-ffi/`.
