@@ -139,6 +139,24 @@ jobs:
 
       - name: Run example
         run: |
+          for object in .lake/build/csdp/*.o .lake/build/ffi/*.o; do
+            minos="$(vtool -show-build "$object" | awk '$1 == "minos" { print $2 }')"
+            if [ "$minos" != "13.0" ]; then
+              echo "$object targets macOS $minos instead of 13.0" >&2
+              exit 1
+            fi
+          done
+          # Native executables use the static FFI bridge. The loadable bridge
+          # is only for the interpreter/editor and must not be a dependency.
+          if otool -L .lake/build/bin/csdp-example | grep -q libcsdp_bridge; then
+            echo "csdp-example unexpectedly links the interpreter bridge" >&2
+            exit 1
+          fi
+          if otool -L .lake/build/lib/libcsdp.dylib | grep -q Accelerate; then
+            echo "libcsdp unexpectedly links the unsafe Accelerate backend" >&2
+            exit 1
+          fi
+          .lake/build/bin/csdp-example
           set +e
           lake exe csdp-example > /tmp/csdp.out 2>&1
           rc=$?
