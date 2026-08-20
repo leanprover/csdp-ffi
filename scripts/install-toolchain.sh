@@ -91,20 +91,20 @@ else
   # Keep the emergency direct-download path as auditable as the ordinary elan
   # path. A toolchain bump must update these digests from the Lean release.
   case "$VERSION:$ARCH" in
-    v4.33.0-rc1:linux)
-      EXPECTED_SHA256="25e7b3e18ec75a4e2529fc23194be8e3cc3183df99b553f870d8a111c7488210"
+    v4.34.0-rc1:linux)
+      EXPECTED_SHA256="41dc6a6ec143ece8ed4ba4c4c6978c91f21ad5cbe3c4e7728ad31b869961dc17"
       ;;
-    v4.33.0-rc1:linux_aarch64)
-      EXPECTED_SHA256="3109cd49829adb096dc85557c313451fb868be15c4259697192073d99c4b69b0"
+    v4.34.0-rc1:linux_aarch64)
+      EXPECTED_SHA256="e5b8ca631c1a5dce9e8477664f01543cf192737d63b3fbef43f3fae176efdabe"
       ;;
-    v4.33.0-rc1:darwin)
-      EXPECTED_SHA256="d9565992dca80eae8d28a674558cad4615911beaca35fdd54fdf3db6f77e4a10"
+    v4.34.0-rc1:darwin)
+      EXPECTED_SHA256="c011bf88cd984cab01d2be5b0ed98e1a23aa744ad5f8cf77e6f5c8cec82e63f9"
       ;;
-    v4.33.0-rc1:darwin_aarch64)
-      EXPECTED_SHA256="1eeb88e106f0ff311e84552edd5dbb7415e08518a18197e932492ce4f90bdba5"
+    v4.34.0-rc1:darwin_aarch64)
+      EXPECTED_SHA256="ae1f70cd5a72eeb93f8600edfeaed8550b9c9b073f04162ab6d721ab801ed709"
       ;;
-    v4.33.0-rc1:windows)
-      EXPECTED_SHA256="153a94f18d25621b37145a0f59da01970c2248124cd7bc69c84ab90427b5a0f8"
+    v4.34.0-rc1:windows)
+      EXPECTED_SHA256="8821688676d68729d8fd509402246ec85913033ea0aec3cb7e68ce027bcc757c"
       ;;
     *)
       echo "No audited SHA-256 digest for Lean $VERSION on $ARCH" >&2

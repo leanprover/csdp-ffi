@@ -20,6 +20,12 @@ Linker arguments for the BLAS / LAPACK runtime CSDP requires.
 def macSdkPath : String :=
   "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
 
+/-- Keep every C object in a macOS release compatible with Lean's own
+deployment target. Setting this only while linking is too late: the object
+files retain the host SDK version and make the resulting archive nonportable. -/
+def macDeploymentTargetArgs : Array String :=
+  if System.Platform.isOSX then #["-mmacosx-version-min=13.0"] else #[]
+
 def linuxLibDirs : Array FilePath := #[
   "/usr/lib/x86_64-linux-gnu",
   "/usr/lib/aarch64-linux-gnu",
@@ -179,12 +185,16 @@ private def missingNativeDepsMessage (pkgDir : FilePath) : IO (Option String) :=
       directories."
 
 /-- Use the bundled implementation of the small BLAS/LAPACK surface CSDP calls
-when explicitly configured, forced for testing, or unavailable on Linux. The
+when explicitly configured, forced for testing, on macOS, or unavailable on
+Linux. Apple Accelerate triggers an invalid free during pthread-local cleanup
+with Lean 4.34's allocator interposition when Lean's main worker exits. The
 explicit configuration is used for dependency release archives on every OS. -/
 private def usePortableLinalg (pkgDir : FilePath) : IO Bool := do
   if configuredPortableLinalg || (← forcePortableLinalg) then
     return true
-  if System.Platform.isOSX || System.Platform.isWindows then
+  if System.Platform.isOSX then
+    return true
+  if System.Platform.isWindows then
     return false
   return (← missingNativeDepsMessage pkgDir).isSome
 
@@ -260,7 +270,8 @@ private def portableLinalgOTarget (pkg : Package) : FetchM (Job FilePath) := do
   let oFile := pkg.dir / defaultBuildDir / "ffi" / "portable_linalg.o"
   let srcTarget ← inputTextFile <| pkg.dir / "ffi" / "portable_linalg.c"
   buildO oFile srcTarget
-    (traceArgs := #["-O2", "-pipe", "-fPIC", "-std=c99"] ++ sanitizerArgs)
+    (traceArgs := #["-O2", "-pipe", "-fPIC", "-std=c99"] ++
+      macDeploymentTargetArgs ++ sanitizerArgs)
 
 private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit)
     (portable : Bool) (src : String) :
@@ -271,7 +282,7 @@ private def csdpOTarget (pkg : Package) (nativeDeps : Job Unit)
   let inc := pkg.dir / "vendored" / "csdp" / "include"
   buildO oFile (srcTarget.add nativeDeps)
     (weakArgs := #["-I", inc.toString])
-    (traceArgs := csdpCFlags portable)
+    (traceArgs := csdpCFlags portable ++ macDeploymentTargetArgs)
 
 /-! ## Lean ↔ CSDP bridge. -/
 
@@ -291,7 +302,8 @@ private def bridgeOTarget (pkg : Package) (src : String) :
       "-I", csdpInc,
       "-I", ffiInc
     ])
-    (traceArgs := #["-O2", "-pipe", "-DBIT64", "-fPIC"] ++ sanitizerArgs)
+    (traceArgs := #["-O2", "-pipe", "-DBIT64", "-fPIC"] ++
+      macDeploymentTargetArgs ++ sanitizerArgs)
 
 /-- Private archive containing the CSDP solver.
 
@@ -481,7 +493,10 @@ lean_lib CSDP where
       -- and loads the DLL path for interpreter setup.
       #[`@/windowsBridgeLink]
     else
-      #[`@/csdpDynlib, `@/csdpBridgeDynlib]
+      -- Native executables contain the static bridge. Linking the loadable
+      -- interpreter bridge as well duplicates every FFI symbol and, on macOS,
+      -- makes the bridge depend on process-global Lean allocator state.
+      #[`@/csdpDynlib]
 
 lean_exe «csdp-example» where
   root := `Main
